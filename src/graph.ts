@@ -39,36 +39,39 @@ type TaskLike = Pick<Task, 'key' | 'status'>;
 const AUTO_KEY = /^T(\d+)$/;
 
 /**
- * A key that names nothing.
+ * The next free `T<n>` key for a graph that already holds `existing`.
  *
- * `T3` is a slot number, not a name. A graph full of them reads as
- * `T1 -> T2 -> T5` and the model has to fetch every node to say anything
- * about the plan, which is both useless to a person and expensive to a
- * conversation. Earlier versions of this server *minted* these when a task
- * arrived without a key; they are now refused at creation instead.
- *
- * Refused: `T3`, `t12`, `3`, `x`, and anything under two characters.
- * Existing tasks keyed this way stay addressable — a graph written before
- * this rule keeps working, and `update_task`, `get_task` and edges all
- * still take whatever key a task already has.
+ * Numbering never reuses a gap: a graph that has had T1..T9 and lost T4
+ * still gets T10 next, because a key that comes back with a different task
+ * behind it is worse than a gap.
  */
-const PLACEHOLDER_KEY = /^(?:[a-z]\d+|\d+)$/i;
-
-export function isPlaceholderKey(key: string): boolean {
-  const trimmed = key.trim();
-  return trimmed.length < 2 || PLACEHOLDER_KEY.test(trimmed);
+export function nextAutoKey(existing: Iterable<string>): string {
+  let max = 0;
+  for (const key of existing) {
+    const m = AUTO_KEY.exec(key);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `T${max + 1}`;
 }
 
 /**
- * The complaint to hand back, phrased so the caller can act on it without a
- * second round trip.
+ * Assigns `T<n>` keys to the entries of `incoming` that have none, without
+ * colliding with `existing` or with each other.
  */
-export function placeholderKeyMessage(key: string): string {
-  return (
-    `"${key}" names nothing — task keys are how people and models refer to the work, so they have to mean something. ` +
-    `Use a short slug drawn from the title, like "write-tests" or "brand". ` +
-    `(Keys of the form T3, a bare letter or a bare number are refused; existing tasks keyed that way still work.)`
-  );
+export function assignKeys(existing: Iterable<string>, incoming: (string | undefined)[]): string[] {
+  const taken = new Set(existing);
+  const out: string[] = [];
+  for (const key of incoming) {
+    if (key) {
+      taken.add(key);
+      out.push(key);
+      continue;
+    }
+    const fresh = nextAutoKey(taken);
+    taken.add(fresh);
+    out.push(fresh);
+  }
+  return out;
 }
 
 // -- Cycles -------------------------------------------------------------------------
@@ -194,9 +197,6 @@ export function blockedBy(key: string, tasks: readonly Task[], edges: readonly E
 
 // -- Mermaid ------------------------------------------------------------------------
 
-/** How much of a title a diagram label carries. Matches the receipts. */
-const LABEL_CHARS = 80;
-
 const MERMAID_CLASS: Record<TaskStatus, string> = {
   todo: 'todo',
   in_progress: 'doing',
@@ -219,10 +219,7 @@ export function toMermaid(tasks: readonly Task[], edges: readonly Edge[]): strin
   const sorted = [...tasks].sort((a, b) => compareKeys(a.key, b.key));
 
   for (const task of sorted) {
-    // The label is repeated per node and counts against the render budget,
-    // so it is shortened here rather than being refused on the way in.
-    const label = task.title.length <= LABEL_CHARS ? task.title : `${task.title.slice(0, LABEL_CHARS - 1).trimEnd()}\u2026`;
-    lines.push(`  ${mermaidId(task.key)}["${escapeMermaid(`${task.key}: ${label}`)}"]:::${MERMAID_CLASS[task.status]}`);
+    lines.push(`  ${mermaidId(task.key)}["${escapeMermaid(`${task.key}: ${task.title}`)}"]:::${MERMAID_CLASS[task.status]}`);
   }
   for (const edge of edges) {
     if (!known.has(edge.from) || !known.has(edge.to)) continue;
