@@ -58,5 +58,35 @@
   "detail": {
     "type": "string",
     "description": "Long-form context, returned by read(what=task) but never in a receipt."
+  },
+  "task": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "key"
+    ],
+    "description": "One task; only `key` is required, and `title` only when the key is new.",
+    "properties": {
+      "key": {
+        "$ref": "common.json#/task_key"
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Short imperative title."
+      },
+      "detail": {
+        "$ref": "common.json#/detail"
+      },
+      "status": {
+        "$ref": "common.json#/status"
+      },
+      "priority": {
+        "$ref": "common.json#/priority"
+      },
+      "tags": {
+        "$ref": "common.json#/tags"
+      }
+    }
   }
 }

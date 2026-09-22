@@ -209,7 +209,10 @@ function inlineRefs(node: unknown): unknown {
     const name = ref.replace('common.json#/', '');
     const definition = (COMMON_SCHEMA as Record<string, unknown>)[name];
     if (definition === undefined) throw new Error(`No common definition for "${ref}"`);
-    Object.assign(resolved, definition as Record<string, unknown>);
+    // Recurse: a shared definition may itself be built from shared pieces,
+    // and copying it wholesale would ship those inner `$ref`s to a client
+    // that cannot resolve them.
+    Object.assign(resolved, inlineRefs(definition) as Record<string, unknown>);
   }
   for (const [key, value] of entries) {
     if (key === '$ref') continue;

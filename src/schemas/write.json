@@ -30,34 +30,7 @@
         "maxItems": 200,
         "description": "Tasks to create or update, matched by key.",
         "items": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "key"
-          ],
-          "properties": {
-            "key": {
-              "$ref": "common.json#/task_key"
-            },
-            "title": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Short imperative title; required for a new task."
-            },
-            "detail": {
-              "$ref": "common.json#/detail"
-            },
-            "status": {
-              "$ref": "common.json#/status",
-              "description": "Omitted leaves an existing status alone."
-            },
-            "priority": {
-              "$ref": "common.json#/priority"
-            },
-            "tags": {
-              "$ref": "common.json#/tags"
-            }
-          }
+          "$ref": "common.json#/task"
         }
       },
       "edges": {

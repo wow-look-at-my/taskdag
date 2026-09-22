@@ -50,7 +50,10 @@ describe('context budget', () => {
       expect(tool.description.length, tool.name).toBeGreaterThan(40);
       // The shared definitions in common.json are a source convenience. A
       // client has no common.json and no way to ask for one, so what goes
-      // over the wire has to be self-contained.
+      // over the wire has to be self-contained — including the refs INSIDE
+      // a shared definition, which is where this first went wrong: `task`
+      // is built from `task_key`, `status` and the rest, and copying it
+      // without recursing shipped those inner refs.
       expect(JSON.stringify(tool.inputSchema), tool.name).not.toContain('$ref');
     }
   });
