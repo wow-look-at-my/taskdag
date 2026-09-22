@@ -1,0 +1,85 @@
+{
+  "name": "read",
+  "title": "Read a graph",
+  "description": "Read a task graph: select a part of it, then say what you want back about it.",
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
+  "inputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "graph": {
+        "$ref": "common.json#/graph_id"
+      },
+      "keys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 50,
+        "description": "Select only these tasks and their neighbourhood."
+      },
+      "depth": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10,
+        "default": 1,
+        "description": "Hops out from `keys`."
+      },
+      "direction": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "both"
+        ],
+        "default": "both",
+        "description": "up = prerequisites, down = dependents."
+      },
+      "status": {
+        "type": "array",
+        "items": {
+          "$ref": "common.json#/status"
+        },
+        "maxItems": 5,
+        "description": "Select only these statuses; seeds always survive."
+      },
+      "include": {
+        "type": "array",
+        "maxItems": 6,
+        "description": "What to return; the default is a summary and the ready queue.",
+        "items": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "ready",
+            "tasks",
+            "detail",
+            "mermaid",
+            "graphs"
+          ]
+        }
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 5,
+        "description": "How many ready tasks to name."
+      },
+      "max_chars": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Diagram budget, default 4000."
+      },
+      "override_token": {
+        "type": "string",
+        "description": "From a previous overflow; single use."
+      }
+    }
+  }
+}
