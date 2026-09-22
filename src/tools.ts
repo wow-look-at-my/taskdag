@@ -173,9 +173,17 @@ const statusSchema = z.enum(TASK_STATUSES);
 const graphArg = z.string().optional().describe('Graph handle ("g_…"); omit for the most recent.');
 
 const taskInputSchema = z.object({
-  key: z.string().min(1).max(64).optional().describe('Stable key such as "T3". Omit to auto-assign the next free T<n>.'),
-  title: z.string().min(1).max(200).describe('Short imperative title.'),
-  detail: z.string().max(4000).optional(),
+  key: z
+    .string()
+    .min(2)
+    .max(64)
+    .describe('Required. A slug from the title, e.g. "write-tests". "T3" and bare numbers are refused.'),
+  title: z.string().min(1).max(200).describe('Short imperative title, up to 200 chars.'),
+  detail: z
+    .string()
+    .max(4000)
+    .optional()
+    .describe('Up to 4000 chars, and free per call: it lives in the resource and `get_task`, never in a result.'),
   priority: z.number().int().min(-100).max(100).optional().describe('Higher sorts first in the ready queue. Default 0.'),
   tags: z.array(z.string().max(40)).max(20).optional(),
   status: statusSchema.optional().describe('Omitted leaves the existing status alone.'),
@@ -500,8 +508,8 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
     {
       title: 'Delete graph',
       description:
-        'Irreversible. Removes a graph entirely — tasks, edges and the handle itself. `reset` empties a graph and keeps it; ' +
-        'this makes it gone. Only when the user says delete, remove or get rid of a whole plan.',
+        'Irreversible. Removes a graph entirely — tasks, edges, handle. `reset` empties one and keeps it; this makes it gone. ' +
+        'Only when the user says delete or remove a whole plan.',
       inputSchema: z.object({
         // NOT `graphArg`: this is the one tool that must never fall back to
         // "the most recent one". A default that empties the wrong graph is
@@ -530,7 +538,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
     {
       title: 'List graphs',
       description:
-        'Every non-empty graph on this connector, newest first: handle, title, task count. Use it to recover a handle you no longer have. ' +
+        'Every non-empty graph here, newest first: handle, title, task count. Use it to recover a handle you lost. ' +
         'An emptied graph is not listed; its handle still works.',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

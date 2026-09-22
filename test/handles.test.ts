@@ -64,7 +64,7 @@ describe('a handle addresses the state', () => {
   it('keeps several graphs on one connector, and lists them newest first', async () => {
     const mcp = client();
     const site = await mcp.json<Receipt>('plan', SITE);
-    const trip = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Weekend trip', tasks: [{ title: 'Book train' }] });
+    const trip = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Weekend trip', tasks: [{ key: 'train', title: 'Book train' }] });
 
     expect(trip.graph).not.toBe(site.graph);
 
@@ -76,7 +76,7 @@ describe('a handle addresses the state', () => {
   it('defaults to the most recent graph when no handle is passed', async () => {
     const mcp = client();
     await mcp.json<Receipt>('plan', SITE);
-    const trip = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Weekend trip', tasks: [{ title: 'Book train' }] });
+    const trip = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Weekend trip', tasks: [{ key: 'train', title: 'Book train' }] });
 
     const implicit = await mcp.json<Receipt>('show');
 
@@ -118,18 +118,73 @@ describe('a handle addresses the state', () => {
   });
 });
 
+describe('a key has to name something', () => {
+  it('refuses to create a task keyed like a slot number', async () => {
+    const mcp = client();
+
+    const refused = await mcp.tool('plan', { title: 'Release', tasks: [{ key: 'T3', title: 'Write the tests' }] });
+
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toContain('names nothing');
+    // The message has to carry the fix, or the model just tries again.
+    expect(textOf(refused)).toContain('write-tests');
+  });
+
+  it('refuses a task with no key at all', async () => {
+    const mcp = client();
+
+    // The schema rejects this one before any handler sees it: `key` used to
+    // be optional and auto-assigned, which is how T3 got minted.
+    const refused = await mcp.tool('plan', { title: 'Release', tasks: [{ title: 'Write the tests' }] });
+
+    expect(refused.isError).toBe(true);
+  });
+
+  it('writes nothing at all when one task in the batch is refused', async () => {
+    const mcp = client();
+    const planned = await mcp.json<Receipt>('plan', SITE);
+
+    const refused = await mcp.tool('plan', {
+      graph: planned.graph,
+      tasks: [
+        { key: 'launch-checklist', title: 'Launch checklist' },
+        { key: 'T9', title: 'Something else' },
+      ],
+    });
+
+    expect(refused.isError).toBe(true);
+    // The good task in the same call must not have landed.
+    expect((await mcp.json<Receipt>('show', { graph: planned.graph })).tasks).toBe(4);
+  });
+
+  it('takes any key that carries meaning', async () => {
+    const mcp = client();
+
+    const made = await mcp.json<Receipt>('plan', {
+      title: 'Release',
+      tasks: [
+        { key: 'write-tests', title: 'Write the tests' },
+        { key: 'PR-1423', title: 'Land the PR' },
+        { key: 'step-1', title: 'First step' },
+      ],
+    });
+
+    expect(made.tasks).toBe(3);
+  });
+});
+
 describe('an empty graph is a deleted graph, for listing purposes', () => {
   it('drops out of the list when it is emptied, and comes back when it is not', async () => {
     const mcp = client();
     const kept = await mcp.json<Receipt>('plan', SITE);
-    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ title: 'One' }] });
+    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ key: 'one', title: 'One' }] });
 
     await mcp.json('reset', { graph: scratch.graph, confirm: 'RESET' });
     let listed = (await mcp.json<{ graphs: { id: string }[] }>('graphs')).graphs;
     expect(listed.map((g) => g.id)).toEqual([kept.graph]);
 
     // The handle never stopped working -- writing to it un-hides the graph.
-    await mcp.json('plan', { graph: scratch.graph, tasks: [{ title: 'Back again' }] });
+    await mcp.json('plan', { graph: scratch.graph, tasks: [{ key: 'back-again', title: 'Back again' }] });
     listed = (await mcp.json<{ graphs: { id: string }[] }>('graphs')).graphs;
     expect(listed.map((g) => g.id).sort()).toEqual([kept.graph, scratch.graph].sort());
   });
@@ -137,12 +192,12 @@ describe('an empty graph is a deleted graph, for listing purposes', () => {
   it('still resolves an emptied graph as the default, rather than jumping to an older one', async () => {
     const mcp = client();
     await mcp.json<Receipt>('plan', SITE);
-    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ title: 'One' }] });
+    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ key: 'one', title: 'One' }] });
     await mcp.json('reset', { graph: scratch.graph, confirm: 'RESET' });
 
     // Clear it, then add to it without naming it: that has to land where
     // the user was working, not in the graph before it.
-    const added = await mcp.json<Receipt>('plan', { tasks: [{ title: 'Next thing' }] });
+    const added = await mcp.json<Receipt>('plan', { tasks: [{ key: 'next-thing', title: 'Next thing' }] });
 
     expect(added.graph).toBe(scratch.graph);
   });
@@ -152,7 +207,7 @@ describe('delete_graph', () => {
   it('removes a graph, its tasks and its handle', async () => {
     const mcp = client();
     const keep = await mcp.json<Receipt>('plan', SITE);
-    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ title: 'One' }] });
+    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ key: 'one', title: 'One' }] });
 
     const gone = await mcp.json<{ deleted: string; graphs: number }>('delete_graph', { graph: scratch.graph, confirm: 'DELETE' });
 

@@ -22,11 +22,11 @@ import { client, textOf } from './mcp-client.ts';
 const BIG = {
   title: 'Platform migration',
   tasks: Array.from({ length: 40 }, (_, i) => ({
-    key: `T${i + 1}`,
+    key: `step-${i + 1}`,
     title: `Task number ${i + 1} with a realistic title`,
     tags: ['area:backend'],
   })),
-  edges: Array.from({ length: 39 }, (_, i) => ({ from: `T${i + 2}`, to: `T${i + 1}` })),
+  edges: Array.from({ length: 39 }, (_, i) => ({ from: `step-${i + 2}`, to: `step-${i + 1}` })),
 };
 
 describe('context budget', () => {
@@ -66,8 +66,8 @@ describe('context budget', () => {
     for (const [name, args] of [
       ['show', {}],
       ['ready', { limit: 50 }],
-      ['link', { edges: [{ from: 'T1', to: 'T40' }] }],
-      ['update_task', { key: 'T1', status: 'done' }],
+      ['link', { edges: [{ from: 'step-1', to: 'step-40' }] }],
+      ['update_task', { key: 'step-1', status: 'done' }],
     ] as const) {
       const text = textOf(await mcp.tool(name, { graph: planned.graph, ...args }));
       expect(text.length, `${name} result`).toBeLessThan(700);

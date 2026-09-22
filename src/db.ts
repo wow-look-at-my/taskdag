@@ -24,7 +24,7 @@
  */
 
 import type { Edge, Task, TaskStatus } from './graph.ts';
-import { assignKeys, findCycle } from './graph.ts';
+import { findCycle, isPlaceholderKey, placeholderKeyMessage } from './graph.ts';
 import { ensureSchema } from './schema.ts';
 
 /** The whole working graph behind one handle, in key space. */
@@ -48,9 +48,9 @@ export interface GraphSummary extends GraphHandle {
   tasks: number;
 }
 
-/** One task as `plan` / `add_tasks` accept it. */
+/** One task as `plan` accepts it. */
 export interface TaskInput {
-  key?: string;
+  key: string;
   title: string;
   detail?: string;
   priority?: number;
@@ -302,13 +302,17 @@ export async function mergeGraph(
   const existing = await keyIndex(db, graph);
   const current = await loadGraph(db, graph);
 
-  // Keys first: an incoming task without one gets the next free T<n>, and
-  // edges may name those same new keys, so this has to settle before the
-  // edges are resolved.
-  const keys = assignKeys(
-    existing.keys(),
-    incomingTasks.map((t) => t.key),
-  );
+  // A key that names nothing is refused, but only when it would CREATE a
+  // task. Updating one that already carries such a key has to keep working:
+  // graphs written before this rule exist, and refusing to touch them would
+  // strand them.
+  for (const task of incomingTasks) {
+    const key = task.key.trim();
+    if (!key) throw new GraphError('Every task needs a key.');
+    if (!existing.has(key) && isPlaceholderKey(key)) throw new GraphError(placeholderKeyMessage(task.key));
+  }
+
+  const keys = incomingTasks.map((task) => task.key.trim());
 
   const created: string[] = [];
   const updated: string[] = [];

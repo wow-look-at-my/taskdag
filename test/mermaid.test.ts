@@ -34,8 +34,8 @@ interface Overflow {
 function chain(n: number) {
   return {
     title: 'Big plan',
-    tasks: Array.from({ length: n }, (_, i) => ({ key: `T${i + 1}`, title: `Task number ${i + 1}, with a title of a realistic length` })),
-    edges: Array.from({ length: n - 1 }, (_, i) => ({ from: `T${i + 2}`, to: `T${i + 1}` })),
+    tasks: Array.from({ length: n }, (_, i) => ({ key: `step-${i + 1}`, title: `Task number ${i + 1}, with a title of a realistic length` })),
+    edges: Array.from({ length: n - 1 }, (_, i) => ({ from: `step-${i + 2}`, to: `step-${i + 1}` })),
   };
 }
 
@@ -56,7 +56,7 @@ describe('mermaid', () => {
     const mcp = client();
     await mcp.json('plan', chain(20));
 
-    const drawn = await mcp.json<Mermaid>('mermaid', { keys: ['T10'], depth: 1 });
+    const drawn = await mcp.json<Mermaid>('mermaid', { keys: ['step-10'], depth: 1 });
 
     // T9 (prerequisite), T10 (seed), T11 (dependent), and nothing else.
     expect(drawn.nodes).toBe(3);
@@ -69,7 +69,7 @@ describe('mermaid', () => {
     const mcp = client();
     await mcp.json('plan', chain(20));
 
-    const up = await mcp.json<Mermaid>('mermaid', { keys: ['T10'], depth: 2, direction: 'up' });
+    const up = await mcp.json<Mermaid>('mermaid', { keys: ['step-10'], depth: 2, direction: 'up' });
 
     expect(up.nodes).toBe(3);
     expect(up.mermaid).toContain('Task number 8');
@@ -79,9 +79,9 @@ describe('mermaid', () => {
   it('filters by status, and never drops the seed', async () => {
     const mcp = client();
     const planned = await mcp.json<{ graph: string }>('plan', chain(6));
-    await mcp.json('update_task', { graph: planned.graph, key: 'T3', status: 'done' });
+    await mcp.json('update_task', { graph: planned.graph, key: 'step-3', status: 'done' });
 
-    const kept = await mcp.json<Mermaid>('mermaid', { keys: ['T3'], depth: 1, status: ['todo'] });
+    const kept = await mcp.json<Mermaid>('mermaid', { keys: ['step-3'], depth: 1, status: ['todo'] });
 
     // T3 is done and still drawn: it is what was asked about.
     expect(kept.mermaid).toContain('Task number 3');
@@ -148,7 +148,7 @@ describe('the cap, and the one way past it', () => {
     const mcp = client();
     await mcp.json('plan', chain(120));
     const over = await mcp.json<Overflow>('mermaid');
-    const other = await mcp.json<{ graph: string }>('plan', { new_graph: true, title: 'Elsewhere', tasks: [{ title: 'One' }] });
+    const other = await mcp.json<{ graph: string }>('plan', { new_graph: true, title: 'Elsewhere', tasks: [{ key: 'one', title: 'One' }] });
 
     const rejected = await mcp.tool('mermaid', { graph: other.graph, override_token: over.override_token });
 

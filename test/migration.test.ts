@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb, rawDb } from './fake-d1.ts';
 import { SCHEMA_STATEMENTS, ensureSchema, statementsOf } from '../src/schema.ts';
 import dropSql from '../migrations/0003_drop_legacy_tables.sql';
-import { createGraph, deleteGraph, listGraphs, loadGraph, mergeGraph, resolveGraph } from '../src/db.ts';
+import { GraphError, createGraph, deleteGraph, listGraphs, loadGraph, mergeGraph, resolveGraph } from '../src/db.ts';
 
 const TOKEN = 'kJ3nQ7vB9xZp2LmR8tW4yU6iO1aS5dF0gH-_cVbNxQe';
 const OTHER_TOKEN = 'zX9wQ2eR5tY7uI0oP3aS6dF8gH1jK4lZ-_cVbNmQwEr';
@@ -127,6 +127,19 @@ describe('0002 backfill', () => {
     // the current schema and nothing else.
     expect(tableNames(fresh)).toEqual(expect.arrayContaining(['graph_handles', 'graph_tasks', 'graph_edges']));
     expect(tableNames(fresh)).not.toContain('graphs');
+  });
+
+  it('keeps a legacy T-keyed task editable, while refusing to create another', async () => {
+    // Graphs written before keys had to mean something are full of T1, T2.
+    // The rule is about CREATION: stranding those graphs would be worse
+    // than the placeholder keys they carry.
+    legacyGraph('aB3dEf7hJ9kLmN2pQr5sT8uV1wX4yZ6-_cVbNmQ', 'Old plan', ['T1', 'T2'], []);
+    const graph = (await resolveGraph(db, 'aB3dEf7hJ9kLmN2pQr5sT8uV1wX4yZ6-_cVbNmQ'))!.id;
+
+    await mergeGraph(db, graph, { tasks: [{ key: 'T1', title: 'Renamed, still T1' }] });
+    expect((await loadGraph(db, graph)).tasks.find((t) => t.key === 'T1')?.title).toBe('Renamed, still T1');
+
+    await expect(mergeGraph(db, graph, { tasks: [{ key: 'T3', title: 'A new one' }] })).rejects.toBeInstanceOf(GraphError);
   });
 
   it('keeps serving the migrated graph as the default, with no handle passed', async () => {

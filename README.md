@@ -263,6 +263,27 @@ quietly cost thousands of tokens. So:
   token is the only way past the cap — for that graph, once. Asking for `max_chars: 500000` up
   front is refused by the schema.
 
+### What a task can carry
+
+| Field | Limit | Where it shows up |
+|---|---|---|
+| `key` | 2–64 chars, **required** | Every result, the diagram, the board, and how everything refers to the task |
+| `title` | 200 chars | Receipts (ready queue), the diagram, the board node |
+| `detail` | 4,000 chars | The graph resource, `get_task`, and the board's selection panel — **never** a tool result |
+| `tags` | 20 × 40 chars | The graph resource and the board |
+| `priority` | −100…100 | Ready-queue order |
+
+`detail` is the place to be generous: it is the one field no tool result carries, so 4,000
+characters of context cost nothing per call and are there when the model actually asks for that
+task. Titles are what get repeated everywhere, so they stay short.
+
+**Keys have to mean something.** `key` is required and a placeholder is refused: `T3`, `t12`, a
+bare letter, a bare number, anything under two characters. Earlier versions *minted* those when a
+task arrived without a key, which produced graphs that read `T1 → T2 → T5` and told nobody
+anything. Use a slug from the title — `write-tests`, `brand`, `PR-1423`. The rule applies to
+**creation** only: a graph written before it keeps working, and a task already keyed `T1` can still
+be updated, linked and completed by that key.
+
 **Graph rules.** Cycles are rejected by `link` and `plan`, with the cycle reported as task keys and
 nothing written. Self-edges are illegal, duplicate edges are idempotent. A cancelled dependency does
 not count as satisfied. Reopening a done task does not reopen its dependents. Keys auto-assign

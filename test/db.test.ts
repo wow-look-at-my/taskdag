@@ -63,8 +63,8 @@ describe('mergeGraph', () => {
   });
 
   it('builds a 12-node graph in one call', async () => {
-    const tasks = Array.from({ length: 12 }, (_, i) => ({ key: `T${i + 1}`, title: `Task ${i + 1}` }));
-    const edges = tasks.slice(1).map((t, i) => ({ from: t.key, to: `T${i + 1}` }));
+    const tasks = Array.from({ length: 12 }, (_, i) => ({ key: `step-${i + 1}`, title: `Task ${i + 1}` }));
+    const edges = tasks.slice(1).map((t, i) => ({ from: t.key, to: `step-${i + 1}` }));
     await mergeGraph(db, OWNER, { tasks, edges });
 
     const state = await loadGraph(db, OWNER);
@@ -77,13 +77,13 @@ describe('mergeGraph', () => {
     const second = await mergeGraph(db, OWNER, {
       tasks: [
         { key: 'homepage', title: 'Homepage build (v2)' },
-        { title: 'Analytics' },
+        { key: 'analytics', title: 'Analytics' },
       ],
-      edges: [{ from: 'T1', to: 'prod' }],
+      edges: [{ from: 'analytics', to: 'prod' }],
     });
 
     expect(second.updated_keys).toEqual(['homepage']);
-    expect(second.created_keys).toEqual(['T1']); // auto key, next free number
+    expect(second.created_keys).toEqual(['analytics']);
 
     const state = await loadGraph(db, OWNER);
     expect(state.tasks).toHaveLength(6); // nothing from the first plan was lost
@@ -140,7 +140,7 @@ describe('mergeGraph', () => {
 
   it('keeps two tokens apart', async () => {
     await mergeGraph(db, OWNER, SITE);
-    await mergeGraph(db, OTHER, { title: 'Weekend trip', tasks: [{ title: 'Book train' }] });
+    await mergeGraph(db, OTHER, { title: 'Weekend trip', tasks: [{ key: 'train', title: 'Book train' }] });
 
     expect((await loadGraph(db, OWNER)).tasks).toHaveLength(5);
     const other = await loadGraph(db, OTHER);
@@ -151,10 +151,10 @@ describe('mergeGraph', () => {
 
 describe('patchTask', () => {
   it('changes only the fields it is given', async () => {
-    await mergeGraph(db, OWNER, { tasks: [{ key: 'T1', title: 'Write it', detail: 'the long version', priority: 3, tags: ['docs'] }] });
-    await patchTask(db, OWNER, 'T1', { status: 'in_progress' });
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'write-it', title: 'Write it', detail: 'the long version', priority: 3, tags: ['docs'] }] });
+    await patchTask(db, OWNER, 'write-it', { status: 'in_progress' });
 
-    const task = await getTask(db, OWNER, 'T1');
+    const task = await getTask(db, OWNER, 'write-it');
     expect(task).toMatchObject({ status: 'in_progress', title: 'Write it', detail: 'the long version', priority: 3, tags: ['docs'] });
   });
 
@@ -194,7 +194,7 @@ describe('unlinkEdges', () => {
 describe('resetGraph', () => {
   it('wipes one token and leaves the other alone', async () => {
     await mergeGraph(db, OWNER, SITE);
-    await mergeGraph(db, OTHER, { tasks: [{ title: 'Book train' }] });
+    await mergeGraph(db, OTHER, { tasks: [{ key: 'train', title: 'Book train' }] });
 
     const deleted = await resetGraph(db, OWNER);
     expect(deleted).toEqual({ tasks_deleted: 5, edges_deleted: 4 });
