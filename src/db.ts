@@ -180,12 +180,22 @@ export async function createGraph(db: D1Database, owner: string, title?: string)
 }
 
 /**
- * Every graph this owner has, newest first.
+ * Every graph this owner has that still has something in it, newest first.
  *
  * This is the half of the design that keeps state out of the context: the
  * model does not have to remember handles across a compaction or a new
  * chat, because it can always ask for them back. One row per graph, with a
  * count rather than its contents.
+ *
+ * EMPTY GRAPHS ARE NOT LISTED. A graph with no tasks is a deleted graph in
+ * every way that matters to a reader, and a list that fills up with the
+ * husks of `reset` calls is a list nobody can use. The row survives, and so
+ * does the handle — a conversation holding one keeps working, and writing
+ * to it puts the graph back in the list. What is hidden is the noise, not
+ * the state.
+ *
+ * Deliberately NOT applied to `resolveGraph`: reset-then-add has to land
+ * back in the graph you just cleared, not silently in an older one.
  */
 export async function listGraphs(db: D1Database, owner: string): Promise<GraphSummary[]> {
   await ensureSchema(db);
@@ -196,6 +206,7 @@ export async function listGraphs(db: D1Database, owner: string): Promise<GraphSu
          LEFT JOIN graph_tasks t ON t.graph_id = g.id
         WHERE g.owner_id = ?
         GROUP BY g.id
+       HAVING COUNT(t.id) > 0
         ORDER BY g.updated_at DESC, g.id`,
     )
     .bind(owner)

@@ -1,5 +1,5 @@
 /**
- * The MCP surface: ten tools and three resources, all owned by one token.
+ * The MCP surface: eleven tools and three resources, all owned by one token.
  *
  * THREE THINGS SHAPE THIS FILE.
  *
@@ -30,6 +30,7 @@ import {
   GraphError,
   consumeOverflow,
   createGraph,
+  deleteGraph,
   getTask,
   listGraphs,
   loadGraph,
@@ -466,14 +467,43 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
       }),
   );
 
-  // 9. graphs — how the model finds state it no longer remembers.
+  // 9. delete_graph — the only way a handle stops existing.
+  registerAppTool(
+    server,
+    'delete_graph',
+    {
+      title: 'Delete graph',
+      description:
+        'Irreversible. Removes a graph entirely — tasks, edges and the handle itself. `reset` empties a graph and keeps it; ' +
+        'this makes it gone. Only when the user says delete, remove or get rid of a whole plan.',
+      inputSchema: z.object({
+        // NOT `graphArg`: this is the one tool that must never fall back to
+        // "the most recent one". A default that empties the wrong graph is
+        // recoverable; a default that deletes it is not.
+        graph: z.string().describe('Handle to delete. Required — this tool has no default.'),
+        confirm: z.literal('DELETE').describe('Must be the exact string "DELETE".'),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      _meta: { ui: { visibility: ['model'] } },
+    },
+    async ({ graph, confirm }) =>
+      guard(async () => {
+        if (confirm !== 'DELETE') return fail('delete_graph requires { "confirm": "DELETE" } exactly. Nothing was changed.');
+        const deleted = await deleteGraph(ctx.db, ctx.owner, graph);
+        if (!deleted) return fail(`No graph with handle "${graph}".`);
+        return json({ deleted: graph, graphs: (await listGraphs(ctx.db, ctx.owner)).length });
+      }),
+  );
+
+  // 10. graphs — how the model finds state it no longer remembers.
   registerAppTool(
     server,
     'graphs',
     {
       title: 'List graphs',
       description:
-        'Every graph on this connector, newest first: handle, title, task count. Use it to recover a handle you no longer have.',
+        'Every non-empty graph on this connector, newest first: handle, title, task count. Use it to recover a handle you no longer have. ' +
+        'An emptied graph is not listed; its handle still works.',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: { ui: { visibility: ['model'] } },

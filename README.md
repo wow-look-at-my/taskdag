@@ -136,8 +136,12 @@ between a bootstrap and a duplicated graph.
 
 A migration that **alters or drops** an existing table is a different animal and still goes through
 `npm run migrate:remote` by hand, deliberately: a schema change that runs itself on the first
-request is how you lose data at 3am. Dropping 0001's now-unused `graphs`/`tasks`/`edges` tables is
-that kind of migration, and is deliberately not written yet. Running `migrations apply` on a
+request is how you lose data at 3am. `0003_drop_legacy_tables.sql` drops 0001's now-unused
+`graphs`/`tasks`/`edges`, and is **deliberately absent from `src/schema.ts`'s migration list** so
+the bootstrap can never run it; a test fails if it is added, or if any statement on the bootstrap
+path is a `DROP`/`ALTER`. Run it by hand once you are satisfied the copy landed — those three
+tables are still the only copy of the pre-handle rows, since 0002 copied rather than moved them,
+and the file carries the query to check that with. Running `migrations apply` on a
 bootstrapped database is a harmless no-op.
 
 ### 3. Run it
@@ -203,8 +207,16 @@ that is the direction work flows.
 | `get_task` | One task in full, with dependencies, dependents and what is blocking it. | no |
 | `show` | Draw the board, return the summary. | no |
 | `mermaid` | The graph as a diagram — selectable, and capped. See below. | no |
-| `graphs` | Every graph on this connector: handle, title, task count. | no |
+| `graphs` | Every **non-empty** graph on this connector: handle, title, task count. | no |
+| `delete_graph` | **Removes a graph entirely**, handle included. Requires `{ "confirm": "DELETE" }` and an explicit handle. | **yes** |
 | `reset` | **Empties one graph.** Requires `{ "confirm": "RESET" }`. The handle survives. | **yes** |
+
+`delete_graph` is the one tool with **no default handle**: every other tool falls back to your most
+recent graph, and a default that empties the wrong one is recoverable where a default that deletes
+it is not. An emptied graph drops out of `graphs` — a list filling up with the husks of `reset`
+calls is a list nobody can read — but its handle keeps working, and writing to it puts it back.
+Resolution is deliberately not filtered the same way: clear a graph and add to it without naming
+it, and you land back in the one you just cleared rather than silently in an older one.
 
 `reset` is a separate tool rather than a `mode` on `plan` on purpose: hosts grant permission per
 tool *name*, so this is what lets you auto-approve `plan` while `reset` still stops and asks.
@@ -308,7 +320,7 @@ graph draws, that selection fetches detail through the host, and that **Done** l
 
 ## Manual check list
 
-1. MCP Inspector against a minted `/<token>/mcp`: `tools/list` shows ten tools, `resources/list`
+1. MCP Inspector against a minted `/<token>/mcp`: `tools/list` shows eleven tools, `resources/list`
    shows `ui://taskdag/board` with MIME `text/html;profile=mcp-app`, and reading
    `taskdag://graph/<handle>` from a `plan` result returns that graph whole.
 2. Claude.ai (or the Cloudflare AI Playground): after `plan`, the board renders inline.

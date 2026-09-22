@@ -118,6 +118,84 @@ describe('a handle addresses the state', () => {
   });
 });
 
+describe('an empty graph is a deleted graph, for listing purposes', () => {
+  it('drops out of the list when it is emptied, and comes back when it is not', async () => {
+    const mcp = client();
+    const kept = await mcp.json<Receipt>('plan', SITE);
+    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ title: 'One' }] });
+
+    await mcp.json('reset', { graph: scratch.graph, confirm: 'RESET' });
+    let listed = (await mcp.json<{ graphs: { id: string }[] }>('graphs')).graphs;
+    expect(listed.map((g) => g.id)).toEqual([kept.graph]);
+
+    // The handle never stopped working -- writing to it un-hides the graph.
+    await mcp.json('plan', { graph: scratch.graph, tasks: [{ title: 'Back again' }] });
+    listed = (await mcp.json<{ graphs: { id: string }[] }>('graphs')).graphs;
+    expect(listed.map((g) => g.id).sort()).toEqual([kept.graph, scratch.graph].sort());
+  });
+
+  it('still resolves an emptied graph as the default, rather than jumping to an older one', async () => {
+    const mcp = client();
+    await mcp.json<Receipt>('plan', SITE);
+    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ title: 'One' }] });
+    await mcp.json('reset', { graph: scratch.graph, confirm: 'RESET' });
+
+    // Clear it, then add to it without naming it: that has to land where
+    // the user was working, not in the graph before it.
+    const added = await mcp.json<Receipt>('plan', { tasks: [{ title: 'Next thing' }] });
+
+    expect(added.graph).toBe(scratch.graph);
+  });
+});
+
+describe('delete_graph', () => {
+  it('removes a graph, its tasks and its handle', async () => {
+    const mcp = client();
+    const keep = await mcp.json<Receipt>('plan', SITE);
+    const scratch = await mcp.json<Receipt>('plan', { new_graph: true, title: 'Scratch', tasks: [{ title: 'One' }] });
+
+    const gone = await mcp.json<{ deleted: string; graphs: number }>('delete_graph', { graph: scratch.graph, confirm: 'DELETE' });
+
+    expect(gone.deleted).toBe(scratch.graph);
+    expect(gone.graphs).toBe(1);
+    const { graphs } = await mcp.json<{ graphs: { id: string }[] }>('graphs');
+    expect(graphs.map((g) => g.id)).toEqual([keep.graph]);
+  });
+
+  it('has no default: a handle must be named', async () => {
+    const mcp = client();
+    await mcp.json<Receipt>('plan', SITE);
+
+    // `reset` defaults to the most recent graph; this must not. Emptying
+    // the wrong graph is recoverable, deleting it is not.
+    const vague = await mcp.tool('delete_graph', { confirm: 'DELETE' });
+
+    expect(vague.isError).toBe(true);
+    const { graphs } = await mcp.json<{ graphs: unknown[] }>('graphs');
+    expect(graphs).toHaveLength(1);
+  });
+
+  it('needs the exact confirmation, and changes nothing without it', async () => {
+    const mcp = client();
+    const planned = await mcp.json<Receipt>('plan', SITE);
+
+    const unconfirmed = await mcp.tool('delete_graph', { graph: planned.graph, confirm: 'yes' });
+
+    expect(unconfirmed.isError).toBe(true);
+    expect((await mcp.json<Receipt>('show', { graph: planned.graph })).tasks).toBe(4);
+  });
+
+  it('will not delete another token\'s graph', async () => {
+    const mcp = client();
+    const mine = await mcp.json<Receipt>('plan', SITE);
+
+    const theft = await mcp.as(OTHER_TOKEN).tool('delete_graph', { graph: mine.graph, confirm: 'DELETE' });
+
+    expect(theft.isError).toBe(true);
+    expect((await mcp.json<Receipt>('show', { graph: mine.graph })).tasks).toBe(4);
+  });
+});
+
 describe('the graph itself lives behind a resource', () => {
   it('links to it from the receipt instead of inlining it', async () => {
     const mcp = client();

@@ -54,6 +54,15 @@ describe('statementsOf', () => {
     }
   });
 
+  it('never puts a DROP on the request path', () => {
+    // The bootstrap replays this whole set on every cold start, so it can
+    // only ever hold statements that are safe to run again. 0003 drops
+    // 0001's tables and is deliberately absent from MIGRATIONS for exactly
+    // that reason; this fails if someone adds it, or writes another like it.
+    for (const statement of SCHEMA_STATEMENTS) expect(statement).not.toMatch(/^\s*(DROP|ALTER|DELETE|UPDATE)\b/i);
+    expect(MIGRATIONS.map((m) => m.name)).not.toContain('0003_drop_legacy_tables.sql');
+  });
+
   it('carries no PRAGMA: remote D1 rejects them and enforces foreign keys itself', () => {
     expect(initSql).not.toMatch(/^\s*PRAGMA/im);
   });
