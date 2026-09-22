@@ -194,6 +194,9 @@ export function blockedBy(key: string, tasks: readonly Task[], edges: readonly E
 
 // -- Mermaid ------------------------------------------------------------------------
 
+/** How much of a title a diagram label carries. Matches the receipts. */
+const LABEL_CHARS = 80;
+
 const MERMAID_CLASS: Record<TaskStatus, string> = {
   todo: 'todo',
   in_progress: 'doing',
@@ -216,7 +219,10 @@ export function toMermaid(tasks: readonly Task[], edges: readonly Edge[]): strin
   const sorted = [...tasks].sort((a, b) => compareKeys(a.key, b.key));
 
   for (const task of sorted) {
-    lines.push(`  ${mermaidId(task.key)}["${escapeMermaid(`${task.key}: ${task.title}`)}"]:::${MERMAID_CLASS[task.status]}`);
+    // The label is repeated per node and counts against the render budget,
+    // so it is shortened here rather than being refused on the way in.
+    const label = task.title.length <= LABEL_CHARS ? task.title : `${task.title.slice(0, LABEL_CHARS - 1).trimEnd()}\u2026`;
+    lines.push(`  ${mermaidId(task.key)}["${escapeMermaid(`${task.key}: ${label}`)}"]:::${MERMAID_CLASS[task.status]}`);
   }
   for (const edge of edges) {
     if (!known.has(edge.from) || !known.has(edge.to)) continue;

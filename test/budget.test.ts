@@ -74,6 +74,32 @@ describe('context budget', () => {
     }
   });
 
+  it('takes a title of any length, and repeats only the front of it', async () => {
+    const mcp = client();
+    const essay = `Rewrite the ingestion pipeline so ${'that '.repeat(60)}it stops dropping events`;
+
+    const planned = await mcp.json<{ graph: string }>('plan', {
+      title: 'Long titles',
+      tasks: [{ key: 'ingestion', title: essay, detail: 'x'.repeat(50_000) }],
+    });
+
+    // Stored whole: nothing was refused, and nothing was lost.
+    const graph = await mcp.readResource<{ nodes: { title: string; detail?: string }[] }>(`taskdag://graph/${planned.graph}`);
+    expect(graph.nodes[0].title).toBe(essay);
+    expect(graph.nodes[0].detail).toHaveLength(50_000);
+
+    // Repeated short: the receipt and the diagram are what cost per turn.
+    // A ~330-character title and a 50kB detail, and the receipt is still a
+    // receipt: the ellipsis is the proof it was shortened rather than refused.
+    const receipt = textOf(await mcp.tool('ready', { graph: planned.graph }));
+    expect(receipt.length).toBeLessThan(500);
+    expect(receipt).toContain('…');
+
+    const drawn = await mcp.json<{ mermaid: string }>('mermaid', { graph: planned.graph });
+    expect(drawn.mermaid).toContain('…');
+    expect(drawn.mermaid.length).toBeLessThan(700);
+  });
+
   it('caps the one result that is meant to be read as text', async () => {
     const mcp = client();
     await mcp.json('plan', BIG);

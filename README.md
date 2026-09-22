@@ -269,30 +269,27 @@ quietly cost thousands of tokens. So:
 | Field | Limit | Where it shows up |
 |---|---|---|
 | `key` | 2–64 chars, **required** | Every result, the diagram, the board, and how everything refers to the task |
-| `title` | 200 chars | Receipts (ready queue), the diagram, the board node |
-| `detail` | 16,000 chars | The graph resource, `get_task`, and the board's selection panel — **never** a tool result |
+| `title` | none | Receipts and diagram labels, **shortened to 80 chars** where they repeat |
+| `detail` | none | The graph resource, `get_task`, the board's selection panel — **never** a tool result |
 | `tags` | 20 × 40 chars | The graph resource and the board |
-| `priority` | −100…100 | Ready-queue order |
+| `priority` | any integer | Ready-queue order |
+| per call | 200 tasks, 400 edges | One `db.batch`, which is one transaction |
 
-`detail` is the place to be generous: it is the one field no tool result carries, so its 16,000
-characters cost nothing per call and are there when the model actually asks for that task. Titles
-are what get repeated everywhere, so they stay short.
+**Bound what is repeated, not what is stored.** A title is echoed into every receipt and every
+diagram, so an essay as a title would be paid for on every turn — but that is a reason to *shorten
+it where it repeats*, not to refuse the write. These schemas reject rather than truncate, and
+`plan` is atomic, so a single over-long field used to throw away a whole batch of good tasks to
+protect a label. Titles and details are now stored whole and shortened at the point of repetition;
+`taskdag://graph/<handle>` and `get_task` always return them intact.
 
-**About these numbers.** Only some of them are load-bearing. The Mermaid budget is tied to a real
-cost (≈1,000 tokens of diagram); the 200-task / 400-edge batch caps bound one `db.batch`, which is
-one transaction; `key`'s minimum falls out of the placeholder rule. The rest — title lengths, tag
-sizes, the priority range — are round numbers chosen because they looked sensible, and they bound
-text that gets repeated into the conversation, which is the only reason to keep them. `detail` was
-in that group and should not have been: it is the one field that never enters a result, so capping
-it tightly bought nothing and could fail an entire 200-task `plan` over one long description —
-these schemas reject, they do not truncate.
+`detail` is the place to be generous: no tool result carries it, so its length costs nothing per
+call and it is there when the model actually opens that task.
 
-**Keys have to mean something.** `key` is required and a placeholder is refused: `T3`, `t12`, a
-bare letter, a bare number, anything under two characters. Earlier versions *minted* those when a
-task arrived without a key, which produced graphs that read `T1 → T2 → T5` and told nobody
-anything. Use a slug from the title — `write-tests`, `brand`, `PR-1423`. The rule applies to
-**creation** only: a graph written before it keeps working, and a task already keyed `T1` can still
-be updated, linked and completed by that key.
+Two limits are real and stay. The **Mermaid budget** is tied to an actual cost — conversation
+tokens — and it defers rather than refuses, handing back a one-shot override token. The **200-task
+/ 400-edge** caps bound a single `db.batch`, which turns "fifty thousand tasks" into a clear
+message instead of a D1 timeout. The rest were round numbers, and round numbers that can fail
+somebody's unrelated work are not worth keeping.
 
 **Graph rules.** Cycles are rejected by `link` and `plan`, with the cycle reported as task keys and
 nothing written. Self-edges are illegal, duplicate edges are idempotent. A cancelled dependency does

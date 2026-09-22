@@ -58,6 +58,8 @@ export function graphUri(handle: string): string {
 
 /** How many ready tasks a receipt names before it stops. */
 const DEFAULT_READY_LIMIT = 5;
+/** How much of a title gets repeated into a receipt or a diagram label. */
+const LABEL_CHARS = 80;
 /**
  * The default character budget for a Mermaid render. Roughly a thousand
  * tokens: enough for the graphs people actually read, small enough that a
@@ -77,6 +79,19 @@ export interface ToolContext {
 }
 
 // -- Result shaping -------------------------------------------------------------------
+
+/**
+ * BOUND WHAT IS REPEATED, NOT WHAT IS STORED.
+ *
+ * A title is echoed into every receipt and every diagram, so an essay as a
+ * title would be paid for on every turn. That is a reason to shorten it
+ * where it is repeated — not a reason to refuse the write, which is what a
+ * schema maximum does: `plan` is one transaction, so one long field would
+ * throw away a whole batch of good tasks to protect a label.
+ */
+function shorten(title: string, limit = LABEL_CHARS): string {
+  return title.length <= limit ? title : `${title.slice(0, limit - 1).trimEnd()}…`;
+}
 
 /** One JSON text block. Every tool in this file returns through here. */
 function json(value: unknown, links: { uri: string; name: string; description: string }[] = []) {
@@ -107,7 +122,7 @@ function counts(state: GraphState): Record<string, number> {
 function readyList(state: GraphState, limit: number): { key: string; title: string }[] {
   const keys = readyKeys(state.tasks, state.edges);
   const byKey = new Map(state.tasks.map((t) => [t.key, t]));
-  return keys.slice(0, limit).map((key) => ({ key, title: byKey.get(key)!.title }));
+  return keys.slice(0, limit).map((key) => ({ key, title: shorten(byKey.get(key)!.title) }));
 }
 
 /**
@@ -178,13 +193,9 @@ const taskInputSchema = z.object({
     .min(2)
     .max(64)
     .describe('Required. A slug from the title, e.g. "write-tests". "T3" and bare numbers are refused.'),
-  title: z.string().min(1).max(200).describe('Short imperative title, up to 200 chars.'),
-  detail: z
-    .string()
-    .max(16000)
-    .optional()
-    .describe('Up to 16000 chars, and free per call: it lives in the resource and `get_task`, never in a result.'),
-  priority: z.number().int().min(-100).max(100).optional().describe('Higher sorts first in the ready queue. Default 0.'),
+  title: z.string().min(1).describe('Short imperative title. Long ones are kept whole and shortened where they are repeated.'),
+  detail: z.string().optional().describe('Free per call: it lives in the resource and `get_task`, never in a tool result.'),
+  priority: z.number().int().optional().describe('Higher sorts first in the ready queue. Default 0.'),
   tags: z.array(z.string().max(40)).max(20).optional(),
   status: statusSchema.optional().describe('Omitted leaves the existing status alone.'),
 });
@@ -265,7 +276,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
       inputSchema: z.object({
         graph: graphArg,
         new_graph: z.boolean().optional().describe('Mint a separate graph. Ignored when `graph` is given.'),
-        title: z.string().max(120).optional().describe('Names the graph. Omit to leave it alone.'),
+        title: z.string().min(1).optional().describe('Names the graph. Omit to leave it alone.'),
         tasks: z.array(taskInputSchema).max(200).default([]),
         edges: z.array(edgeSchema).max(400).default([]),
       }),
@@ -348,9 +359,9 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
         graph: graphArg,
         key: z.string().min(1).describe('The task key, e.g. "write-tests".'),
         status: statusSchema.optional(),
-        title: z.string().min(1).max(200).optional(),
-        detail: z.string().max(16000).optional(),
-        priority: z.number().int().min(-100).max(100).optional(),
+        title: z.string().min(1).optional(),
+        detail: z.string().optional(),
+        priority: z.number().int().optional(),
         tags: z.array(z.string().max(40)).max(20).optional(),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
