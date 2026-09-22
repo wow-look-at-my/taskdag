@@ -12,7 +12,8 @@
     "check:board": "npm run build:ui && node scripts/check-board.mjs",
     "typecheck": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply taskdag-db --local",
-    "migrate:remote": "wrangler d1 migrations apply taskdag-db --remote"
+    "migrate:remote": "wrangler d1 migrations apply taskdag-db --remote",
+    "drop-legacy": "node scripts/drop-legacy.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260922.1",

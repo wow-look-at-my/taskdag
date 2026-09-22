@@ -145,9 +145,10 @@ A migration that **alters or drops** an existing table is a different animal and
 request is how you lose data at 3am. `0003_drop_legacy_tables.sql` drops 0001's now-unused
 `graphs`/`tasks`/`edges`, and is **deliberately absent from `src/schema.ts`'s migration list** so
 the bootstrap can never run it; a test fails if it is added, or if any statement on the bootstrap
-path is a `DROP`/`ALTER`. Run it by hand once you are satisfied the copy landed — those three
-tables are still the only copy of the pre-handle rows, since 0002 copied rather than moved them,
-and the file carries the query to check that with. Running `migrations apply` on a
+path is a `DROP`/`ALTER`. Run it with `npm run drop-legacy`, which is the check and the drop in one command: it compares the
+legacy task count against the migrated one and **refuses to drop anything** if the copy is short,
+because until it runs those three tables are still the only other copy of the pre-handle rows —
+0002 copied them, it did not move them. Without `--confirm` it only reports the counts. Running `migrations apply` on a
 bootstrapped database is a harmless no-op.
 
 ### 3. Run it
@@ -343,6 +344,7 @@ Hosts that ignore MCP Apps lose nothing important: every tool still returns comp
 npm test          # graph rules + merge semantics against real SQL
 npm run typecheck
 npm run check:board   # drives the compiled App in Chromium against a stand-in host
+npm run drop-legacy   # report the legacy/migrated counts; --confirm to run migration 0003
 ```
 
 `test/transport.test.ts` drives the real Worker entry point against that same fake, and asserts the
