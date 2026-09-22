@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS render_overflow (
 
 CREATE INDEX IF NOT EXISTS render_overflow_graph_idx ON render_overflow(graph_id);
 
+-- WHO HAS ALREADY BEEN BACKFILLED. The bootstrap replays this file on every
+-- cold start, so "has this owner got a handle yet?" is not a safe guard on
+-- its own: an owner who deletes the graph the backfill gave them answers
+-- "no" again on the next request and gets it minted straight back. This
+-- table is the durable receipt instead -- written once per legacy owner,
+-- checked by all three copies below, and never removed.
+CREATE TABLE IF NOT EXISTS legacy_backfilled (
+  owner_id      TEXT PRIMARY KEY,
+  backfilled_at TEXT NOT NULL
+);
+
 -- Backfill. A token that had a graph under 0001 keeps it, under a handle
 -- minted here, so an existing connector URL answers exactly as it did.
 -- `randomblob(16)` because a migration cannot call crypto.randomUUID; the
@@ -79,7 +90,8 @@ CREATE INDEX IF NOT EXISTS render_overflow_graph_idx ON render_overflow(graph_id
 INSERT INTO graph_handles (id, owner_id, title, created_at, updated_at)
 SELECT 'g_' || lower(hex(randomblob(8))), g.owner_id, g.title, g.updated_at, g.updated_at
   FROM graphs g
- WHERE NOT EXISTS (SELECT 1 FROM graph_handles h WHERE h.owner_id = g.owner_id);
+ WHERE NOT EXISTS (SELECT 1 FROM graph_handles h WHERE h.owner_id = g.owner_id)
+   AND NOT EXISTS (SELECT 1 FROM legacy_backfilled b WHERE b.owner_id = g.owner_id);
 
 -- The legacy graph is the owner's oldest handle, which is deterministic
 -- whichever order a re-run sees the rows in. Task ids carry over unchanged,
@@ -90,6 +102,7 @@ SELECT t.id,
        t.key, t.title, t.detail, t.status, t.priority, t.tags, t.created_at, t.updated_at
   FROM tasks t
  WHERE EXISTS (SELECT 1 FROM graph_handles h WHERE h.owner_id = t.owner_id)
+   AND NOT EXISTS (SELECT 1 FROM legacy_backfilled b WHERE b.owner_id = t.owner_id)
    AND NOT EXISTS (SELECT 1 FROM graph_tasks gt WHERE gt.id = t.id);
 
 INSERT INTO graph_edges (graph_id, from_id, to_id)
@@ -98,4 +111,12 @@ SELECT (SELECT h.id FROM graph_handles h WHERE h.owner_id = e.owner_id ORDER BY 
   FROM edges e
  WHERE EXISTS (SELECT 1 FROM graph_tasks gt WHERE gt.id = e.from_id)
    AND EXISTS (SELECT 1 FROM graph_tasks gt WHERE gt.id = e.to_id)
+   AND NOT EXISTS (SELECT 1 FROM legacy_backfilled b WHERE b.owner_id = e.owner_id)
    AND NOT EXISTS (SELECT 1 FROM graph_edges ge WHERE ge.from_id = e.from_id AND ge.to_id = e.to_id);
+
+-- LAST, AND ONLY LAST. Every statement above reads this table, so the mark
+-- has to land after they have all run. From here on a legacy owner is done:
+-- deleting the migrated graph deletes it, and the next cold start leaves it
+-- deleted.
+INSERT OR IGNORE INTO legacy_backfilled (owner_id, backfilled_at)
+SELECT g.owner_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM graphs g;

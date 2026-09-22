@@ -1,5 +1,11 @@
 -- Drop 0001's tables, now that every row in them lives under a handle.
 --
+-- AND IT STICKS. src/schema.ts replays the legacy half of the bootstrap --
+-- 0001's DDL and 0002's backfill out of it -- only while these tables are
+-- still here. After this migration they are not, so the next cold start
+-- skips that half instead of recreating what was just dropped. Without that
+-- conditional this file would be a no-op with extra steps.
+--
 -- THIS ONE IS BY HAND, AND IT IS NOT IN src/schema.ts's MIGRATIONS LIST.
 -- The bootstrap replays its list on every cold start, which is safe only
 -- while every statement is idempotent and additive. A DROP is neither

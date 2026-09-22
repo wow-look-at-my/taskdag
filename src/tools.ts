@@ -35,6 +35,7 @@ import {
   listGraphs,
   loadGraph,
   mergeGraph,
+  overflowExists,
   patchTask,
   recordOverflow,
   resetGraph,
@@ -204,6 +205,19 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
     return graph!;
   };
 
+  /**
+   * The graph an edge-only write lands in. Deliberately NOT `write`: an edge
+   * names tasks that have to exist already, so minting a graph here can only
+   * ever produce an empty one that the call then fails against -- and that
+   * husk would become the owner's most recent graph, silently stealing the
+   * next handle-less call.
+   */
+  const existing = async (handle: string | undefined, what: string): Promise<GraphHandle> => {
+    const graph = await resolveGraph(ctx.db, ctx.owner, handle);
+    if (!graph) throw new GraphError(`There is no graph to ${what} yet. Call \`plan\` first.`);
+    return graph;
+  };
+
   // 1. reset — the ONLY tool that deletes tasks. Kept separate from `plan`
   //    so hosts can require confirmation for it alone.
   registerAppTool(
@@ -272,7 +286,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
     },
     async ({ graph, edges }) =>
       guard(async () => {
-        const target = await write(graph);
+        const target = await existing(graph, 'link in');
         const merged = await mergeGraph(ctx.db, target.id, { edges });
         const state = await loadGraph(ctx.db, target.id);
         return receipt(state, { linked: merged.linked });
@@ -291,7 +305,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
     },
     async ({ graph, edges }) =>
       guard(async () => {
-        const target = await write(graph);
+        const target = await existing(graph, 'unlink in');
         const removed = await unlinkEdges(ctx.db, target.id, edges);
         const state = await loadGraph(ctx.db, target.id);
         return receipt(state, { unlinked: removed });
@@ -431,11 +445,23 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
         }
 
         const text = toMermaid(selected.tasks, selected.edges);
-        const unlocked = override_token !== undefined && (await consumeOverflow(ctx.db, target.id, override_token));
-        if (override_token !== undefined && !unlocked) {
-          return fail('That override_token is not valid for this graph, or has already been used. Call mermaid again to get a fresh one.');
+        const capped = Math.min(max_chars ?? DEFAULT_MERMAID_CHARS, MAX_MERMAID_CHARS);
+
+        // A BAD TOKEN IS ALWAYS AN ERROR; A GOOD ONE IS SPENT ONLY WHEN IT
+        // IS NEEDED. Mixing up graphs has to be said out loud either way.
+        // But a receipt is single use, so burning it on a call that fit
+        // under the cap anyway -- "here is the token, and also a narrower
+        // selection" -- would cost the model the one override it earned.
+        let limit = capped;
+        if (override_token !== undefined) {
+          const live = text.length > capped
+            ? await consumeOverflow(ctx.db, target.id, override_token)
+            : await overflowExists(ctx.db, target.id, override_token);
+          if (!live) {
+            return fail('That override_token is not valid for this graph, or has already been used. Call mermaid again to get a fresh one.');
+          }
+          limit = Number.POSITIVE_INFINITY;
         }
-        const limit = unlocked ? Number.POSITIVE_INFINITY : Math.min(max_chars ?? DEFAULT_MERMAID_CHARS, MAX_MERMAID_CHARS);
 
         if (text.length > limit) {
           // No half-diagram: truncated Mermaid is not a diagram, it is a
@@ -489,8 +515,10 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
     async ({ graph, confirm }) =>
       guard(async () => {
         if (confirm !== 'DELETE') return fail('delete_graph requires { "confirm": "DELETE" } exactly. Nothing was changed.');
-        const deleted = await deleteGraph(ctx.db, ctx.owner, graph);
-        if (!deleted) return fail(`No graph with handle "${graph}".`);
+        // An unknown or foreign handle throws out of `resolveGraph` inside
+        // `deleteGraph`, and `guard` turns that into the "no graph with
+        // handle" message. There is no falsy return to test for here.
+        await deleteGraph(ctx.db, ctx.owner, graph);
         return json({ deleted: graph, graphs: (await listGraphs(ctx.db, ctx.owner)).length });
       }),
   );

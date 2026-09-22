@@ -41,6 +41,9 @@ const GRAPH = {
     { from: 'staging', to: 'cms' },
     { from: 'prod', to: 'staging' },
   ],
+  // The resource carries EVERY ready key; the receipt below carries only
+  // the first few. The board has to colour from this one.
+  ready: ['brand', 'cms'],
 };
 
 const RECEIPT = {

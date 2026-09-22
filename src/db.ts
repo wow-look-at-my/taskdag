@@ -214,11 +214,15 @@ export async function listGraphs(db: D1Database, owner: string): Promise<GraphSu
   return results.map((row) => ({ id: row.id, title: row.title, updated_at: row.updated_at, tasks: row.tasks ?? 0 }));
 }
 
-/** Deletes a graph and everything under it. Cascades do the children. */
+/**
+ * Deletes a graph and everything under it. Cascades do the children.
+ *
+ * `resolveGraph` throws for a handle that is unknown or belongs to another
+ * token, so reaching the DELETE at all means the handle is this owner's.
+ */
 export async function deleteGraph(db: D1Database, owner: string, handle: string): Promise<boolean> {
   const graph = await resolveGraph(db, owner, handle);
-  if (!graph) return false;
-  const result = await db.prepare('DELETE FROM graph_handles WHERE id = ? AND owner_id = ?').bind(graph.id, owner).run();
+  const result = await db.prepare('DELETE FROM graph_handles WHERE id = ? AND owner_id = ?').bind(graph!.id, owner).run();
   return (result.meta.changes ?? 0) > 0;
 }
 
@@ -484,11 +488,26 @@ export async function recordOverflow(db: D1Database, graph: string, chars: numbe
   await ensureSchema(db);
   const bytes = crypto.getRandomValues(new Uint8Array(6));
   const token = `ov_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
-  await db
-    .prepare('INSERT INTO render_overflow (token, graph_id, chars, created_at) VALUES (?, ?, ?, ?)')
-    .bind(token, graph, chars, now())
-    .run();
+  // ONE OUTSTANDING RECEIPT PER GRAPH. A token is only ever spent by the
+  // call that comes straight back, so an older one is already dead weight;
+  // without this sweep a model that overflows repeatedly and never
+  // overrides leaves a row behind every time.
+  await db.batch([
+    db.prepare('DELETE FROM render_overflow WHERE graph_id = ?').bind(graph),
+    db.prepare('INSERT INTO render_overflow (token, graph_id, chars, created_at) VALUES (?, ?, ?, ?)').bind(token, graph, chars, now()),
+  ]);
   return token;
+}
+
+/**
+ * Whether a token is a live receipt for this graph, without spending it.
+ * A token from another graph, or one already used, reads as false here
+ * exactly as it does through `consumeOverflow`.
+ */
+export async function overflowExists(db: D1Database, graph: string, token: string): Promise<boolean> {
+  await ensureSchema(db);
+  const row = await db.prepare('SELECT token FROM render_overflow WHERE token = ? AND graph_id = ?').bind(token, graph).first<{ token: string }>();
+  return row !== null;
 }
 
 /**

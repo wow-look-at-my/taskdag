@@ -128,6 +128,12 @@ call. So a deploy pointed at an empty D1 works immediately instead of answering 
 graphs* until somebody remembers `wrangler d1 migrations apply`, and an existing deployment picked
 up `0002_graph_handles.sql` on its next request with its graphs intact.
 
+The bootstrap splits in two: 0002's `CREATE`s always run, and the **legacy half** — 0001's DDL and
+0002's backfill out of it — runs only while `graphs`/`tasks`/`edges` are still present. So a fresh
+deployment never creates 0001's tables just to leave them empty, and once `0003` has dropped them
+the next cold start skips that half instead of recreating what was dropped. That conditional is
+what makes 0003 mean anything.
+
 That is possible because **every statement in `migrations/` is idempotent**: `CREATE ... IF NOT
 EXISTS`, or a backfill whose `WHERE NOT EXISTS` makes a second run do nothing. `0002` adds tables
 beside `0001`'s and copies the rows across rather than rebuilding them, which is what makes it safe

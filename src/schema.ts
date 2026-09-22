@@ -15,6 +15,12 @@
  * which makes running both harmless: a later `migrations apply` is a no-op
  * rather than an error, and so is the next cold start.
  *
+ * WHAT IT WILL NOT DO IS RESURRECT THE PAST. The legacy half — 0001's DDL
+ * and 0002's backfill out of it — runs only while `graphs`/`tasks`/`edges`
+ * are still there. Once `0003_drop_legacy_tables.sql` has removed them by
+ * hand, the next cold start skips that half instead of recreating the
+ * tables it just dropped, and a fresh database never creates them at all.
+ *
  * THIS IS STILL NOT A MIGRATION RUNNER, and there is no ledger here. What it
  * can carry is a migration that only ever adds: new tables beside the old
  * ones, and a backfill guarded so a second run does nothing. A migration
@@ -62,7 +68,42 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
   { name: '0002_graph_handles.sql', sql: handlesSql },
 ];
 
-export const SCHEMA_STATEMENTS = MIGRATIONS.flatMap((migration) => statementsOf(migration.sql));
+/**
+ * The statements that build the current schema. Always applied.
+ *
+ * Only 0002's `CREATE`s: a database that has never held a pre-handle row
+ * needs `graph_handles`/`graph_tasks`/`graph_edges` and nothing else, so a
+ * fresh deployment no longer creates 0001's tables just to leave them
+ * empty forever.
+ */
+export const CURRENT_STATEMENTS = statementsOf(handlesSql).filter((statement) => statement.startsWith('CREATE'));
+
+/**
+ * The statements that carry a pre-handle database forward: 0001's DDL (all
+ * `IF NOT EXISTS`, so a no-op on a database that already has it) and 0002's
+ * backfill, which reads from those tables.
+ *
+ * Applied ONLY when the legacy tables are still present. That conditional
+ * is what lets `0003_drop_legacy_tables.sql` mean something: without it the
+ * bootstrap recreates `graphs`/`tasks`/`edges` on the next cold start and
+ * the drop achieves nothing. It is also what stops the backfill running
+ * against tables that no longer exist.
+ */
+export const LEGACY_STATEMENTS = [...statementsOf(initSql), ...statementsOf(handlesSql).filter((statement) => !statement.startsWith('CREATE'))];
+
+/** Everything the bootstrap can ever run, for the tests that police it. */
+export const SCHEMA_STATEMENTS = [...CURRENT_STATEMENTS, ...LEGACY_STATEMENTS];
+
+/** The tables 0001 made, and 0003 removes. */
+const LEGACY_TABLES = ['graphs', 'tasks', 'edges'];
+
+async function legacyTablesPresent(db: D1Database): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${LEGACY_TABLES.map(() => '?').join(', ')}) LIMIT 1`)
+    .bind(...LEGACY_TABLES)
+    .first<{ name: string }>();
+  return row !== null && row !== undefined;
+}
 
 /**
  * Per-isolate memo. Concurrent cold starts racing each other is fine:
@@ -75,8 +116,12 @@ export function ensureSchema(db: D1Database): Promise<void> {
   let inFlight = applied.get(db);
   if (!inFlight) {
     inFlight = db
-      .batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)))
-      .then(() => undefined)
+      .batch(CURRENT_STATEMENTS.map((statement) => db.prepare(statement)))
+      // One extra round trip, and only on a cold start: ask whether this
+      // database still has a pre-handle past before replaying it.
+      .then(async () => {
+        if (await legacyTablesPresent(db)) await db.batch(LEGACY_STATEMENTS.map((statement) => db.prepare(statement)));
+      })
       // A failure must not be cached, or one bad cold start poisons the
       // isolate for as long as it lives.
       .catch((err: unknown) => {

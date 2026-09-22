@@ -60,6 +60,8 @@ interface GraphData {
   title: string;
   nodes: BoardNode[];
   edges: { from: string; to: string }[];
+  /** EVERY startable key, uncapped. The receipt's `ready` is only the first few. */
+  ready?: string[];
 }
 
 /** What `render` draws: a receipt joined to the graph it points at. */
@@ -132,6 +134,9 @@ const doneBtn = document.getElementById('done') as HTMLButtonElement;
 const refreshBtn = document.getElementById('refresh') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
+/** How many ready keys the header line spells out before it counts them. */
+const READY_HEADER_KEYS = 5;
+
 let board: BoardPayload = {};
 /** The graph every call in this card is about. Comes from the receipt. */
 let handle: string | null = null;
@@ -156,8 +161,13 @@ function render(payload: BoardPayload): void {
 
   titleEl.textContent = payload.title ?? payload.graph?.title ?? 'TaskDAG';
 
+  // The highlight set is every ready key; the header is a line of text, so
+  // it names a handful and counts the rest.
   const ready = payload.ready ?? [];
-  readyEl.textContent = ready.length > 0 ? `Ready: ${ready.map((r) => r.key).join(', ')}` : nodes.length > 0 ? 'Nothing ready' : '';
+  const named = ready.slice(0, READY_HEADER_KEYS).map((r) => r.key);
+  const rest = ready.length - named.length;
+  readyEl.textContent =
+    ready.length > 0 ? `Ready: ${named.join(', ')}${rest > 0 ? ` +${rest} more` : ''}` : nodes.length > 0 ? 'Nothing ready' : '';
 
   graphEl.setData({
     nodes: nodes.map((node): DagNode => {
@@ -283,7 +293,7 @@ async function readGraph(id: string): Promise<GraphData> {
  * entry point goes through.
  */
 async function applyReceipt(receipt: Receipt): Promise<void> {
-  handle = receipt.graph;
+  handle = receipt.graph ?? null;
   if (handle === null) {
     graphData = null;
     render({ title: receipt.title, ready: [], graph: { nodes: [], edges: [] } });
@@ -291,7 +301,15 @@ async function applyReceipt(receipt: Receipt): Promise<void> {
   }
   const data = await readGraph(handle);
   graphData = data;
-  render({ title: receipt.title ?? data.title, ready: receipt.ready ?? [], graph: { nodes: data.nodes, edges: data.edges } });
+  // READY COMES FROM THE RESOURCE, NOT THE RECEIPT. The receipt names only
+  // the first few (DEFAULT_READY_LIMIT on the server), and the board colours
+  // a node by whether it is in this set -- so taking the receipt's list
+  // would draw the 6th startable task as an ordinary todo.
+  const byKey = new Map(data.nodes.map((n) => [n.key, n]));
+  const ready = data.ready
+    ? data.ready.filter((key) => byKey.has(key)).map((key) => ({ key, title: byKey.get(key)!.title }))
+    : (receipt.ready ?? []);
+  render({ title: receipt.title ?? data.title, ready, graph: { nodes: data.nodes, edges: data.edges } });
 }
 
 async function loadDetail(key: string): Promise<void> {
