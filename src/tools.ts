@@ -181,9 +181,9 @@ const taskInputSchema = z.object({
   title: z.string().min(1).max(200).describe('Short imperative title, up to 200 chars.'),
   detail: z
     .string()
-    .max(4000)
+    .max(16000)
     .optional()
-    .describe('Up to 4000 chars, and free per call: it lives in the resource and `get_task`, never in a result.'),
+    .describe('Up to 16000 chars, and free per call: it lives in the resource and `get_task`, never in a result.'),
   priority: z.number().int().min(-100).max(100).optional().describe('Higher sorts first in the ready queue. Default 0.'),
   tags: z.array(z.string().max(40)).max(20).optional(),
   status: statusSchema.optional().describe('Omitted leaves the existing status alone.'),
@@ -346,10 +346,10 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
         'Reopening a done task does not reopen its dependents.',
       inputSchema: z.object({
         graph: graphArg,
-        key: z.string().min(1).describe('The task key, e.g. "T3".'),
+        key: z.string().min(1).describe('The task key, e.g. "write-tests".'),
         status: statusSchema.optional(),
         title: z.string().min(1).max(200).optional(),
-        detail: z.string().max(4000).optional(),
+        detail: z.string().max(16000).optional(),
         priority: z.number().int().min(-100).max(100).optional(),
         tags: z.array(z.string().max(40)).max(20).optional(),
       }),

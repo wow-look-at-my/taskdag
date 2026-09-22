@@ -270,13 +270,22 @@ quietly cost thousands of tokens. So:
 |---|---|---|
 | `key` | 2–64 chars, **required** | Every result, the diagram, the board, and how everything refers to the task |
 | `title` | 200 chars | Receipts (ready queue), the diagram, the board node |
-| `detail` | 4,000 chars | The graph resource, `get_task`, and the board's selection panel — **never** a tool result |
+| `detail` | 16,000 chars | The graph resource, `get_task`, and the board's selection panel — **never** a tool result |
 | `tags` | 20 × 40 chars | The graph resource and the board |
 | `priority` | −100…100 | Ready-queue order |
 
-`detail` is the place to be generous: it is the one field no tool result carries, so 4,000
-characters of context cost nothing per call and are there when the model actually asks for that
-task. Titles are what get repeated everywhere, so they stay short.
+`detail` is the place to be generous: it is the one field no tool result carries, so its 16,000
+characters cost nothing per call and are there when the model actually asks for that task. Titles
+are what get repeated everywhere, so they stay short.
+
+**About these numbers.** Only some of them are load-bearing. The Mermaid budget is tied to a real
+cost (≈1,000 tokens of diagram); the 200-task / 400-edge batch caps bound one `db.batch`, which is
+one transaction; `key`'s minimum falls out of the placeholder rule. The rest — title lengths, tag
+sizes, the priority range — are round numbers chosen because they looked sensible, and they bound
+text that gets repeated into the conversation, which is the only reason to keep them. `detail` was
+in that group and should not have been: it is the one field that never enters a result, so capping
+it tightly bought nothing and could fail an entire 200-task `plan` over one long description —
+these schemas reject, they do not truncate.
 
 **Keys have to mean something.** `key` is required and a placeholder is refused: `T3`, `t12`, a
 bare letter, a bare number, anything under two characters. Earlier versions *minted* those when a
