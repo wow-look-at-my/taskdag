@@ -4,7 +4,10 @@
 -- and no projects table: the token partitions everything, and every query
 -- in src/db.ts binds it.
 
-PRAGMA foreign_keys = ON;
+-- No `PRAGMA foreign_keys = ON` here: D1 enforces foreign keys by default,
+-- and remote D1 rejects most PRAGMA statements — one in a migration file
+-- fails the whole migration for no gain. Local test runs set it themselves
+-- (see test/fake-d1.ts), where sqlite defaults to OFF.
 
 CREATE TABLE IF NOT EXISTS graphs (
   owner_id   TEXT PRIMARY KEY,

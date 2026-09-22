@@ -12,3 +12,10 @@ declare module '*.css' {
   const contents: string;
   export default contents;
 }
+
+// The schema migration is imported as text so the Worker can apply it on
+// first use without the DDL being retyped away from migrations/.
+declare module '*.sql' {
+  const contents: string;
+  export default contents;
+}

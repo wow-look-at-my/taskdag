@@ -14,7 +14,7 @@
  * something.
  */
 
-import { App, applyDocumentTheme, applyHostStyleVariables, getDocumentTheme } from '@modelcontextprotocol/ext-apps';
+import { App, applyDocumentTheme, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps';
 import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 
 // SIDE-EFFECT IMPORT: this is what registers <dag-view>. Every other use
@@ -183,9 +183,10 @@ function select(key: string | null): void {
   if (key) void loadDetail(key);
 }
 
-function setBusy(on: boolean, message = ''): void {
+function setBusy(on: boolean, message = '', isError = false): void {
   busy = on;
   statusEl.textContent = message;
+  statusEl.classList.toggle('error', isError);
   refreshBtn.disabled = on;
   renderSelected();
 }
@@ -196,20 +197,34 @@ function escapeHtml(s: string): string {
 
 // -- Talking to the server, through the host ---------------------------------------------
 
+interface ToolResult {
+  content?: { type: string; text?: string }[];
+  isError?: boolean;
+}
+
+/** The first text block of a tool result, error or not. */
+function textOf(result: ToolResult): string {
+  return result.content?.find((c) => c.type === 'text')?.text ?? '';
+}
+
 /** Tool results are one JSON text block; this is the only place that knows. */
-function parseResult<T>(result: { content?: { type: string; text?: string }[] }): T | null {
-  const block = result.content?.find((c) => c.type === 'text');
-  if (!block?.text) return null;
+function parseResult<T>(result: ToolResult): T | null {
+  const text = textOf(result);
+  if (!text) return null;
   try {
-    return JSON.parse(block.text) as T;
+    return JSON.parse(text) as T;
   } catch {
     return null;
   }
 }
 
 async function callTool<T>(name: string, args: Record<string, unknown>): Promise<T | null> {
-  const result = await app.callServerTool({ name, arguments: args });
-  return parseResult<T>(result as { content?: { type: string; text?: string }[] });
+  const result = (await app.callServerTool({ name, arguments: args })) as ToolResult;
+  // A failed tool comes back as a RESULT with isError set, not a rejection.
+  // Treating that as "no data" is how a broken server renders as a blank
+  // white card instead of saying what went wrong.
+  if (result.isError) throw new Error(textOf(result) || `${name} failed.`);
+  return parseResult<T>(result);
 }
 
 async function loadDetail(key: string): Promise<void> {
@@ -229,7 +244,7 @@ async function update(key: string, status: string): Promise<void> {
     setBusy(false, '');
     if (selectedKey) void loadDetail(selectedKey);
   } catch (err) {
-    setBusy(false, err instanceof Error ? err.message : 'Update failed.');
+    setBusy(false, err instanceof Error ? err.message : 'Update failed.', true);
   }
 }
 
@@ -240,7 +255,7 @@ async function refresh(): Promise<void> {
     if (payload?.graph) render(payload);
     setBusy(false, '');
   } catch (err) {
-    setBusy(false, err instanceof Error ? err.message : 'Refresh failed.');
+    setBusy(false, err instanceof Error ? err.message : 'Refresh failed.', true);
   }
 }
 
@@ -251,10 +266,21 @@ async function refresh(): Promise<void> {
  * the other so the card sits in the conversation rather than on top of it.
  */
 function applyTheme(context: McpUiHostContext | undefined): void {
-  const theme = context?.theme ?? getDocumentTheme();
-  applyDocumentTheme(theme);
+  // LIGHT NEEDS PROOF; dark is what this card does otherwise. The only
+  // proof available is the host saying so: `getDocumentTheme()` reads the
+  // data-theme attribute rather than the media query and falls back to
+  // "light", and inside a sandboxed iframe the media query itself cannot
+  // tell "the user likes light" from "nobody said". Guessing light from
+  // either is what renders a white box inside a dark conversation.
+  const theme = context?.theme;
+  if (theme === 'light') {
+    applyDocumentTheme('light');
+    document.documentElement.dataset.theme = 'light';
+  } else {
+    delete document.documentElement.dataset.theme;
+    applyDocumentTheme('dark');
+  }
   if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables);
-  document.documentElement.dataset.theme = theme;
 }
 
 // -- Wiring --------------------------------------------------------------------------------
@@ -278,7 +304,14 @@ doneBtn.addEventListener('click', () => {
 refreshBtn.addEventListener('click', () => void refresh());
 
 app.addEventListener('toolresult', (params) => {
-  const payload = parseResult<BoardPayload>(params as { content?: { type: string; text?: string }[] });
+  const result = params as ToolResult;
+  if (result.isError) {
+    // The tool that opened this card failed. Say so here — the model's own
+    // reply may be scrolled away, and an empty board reads as a broken one.
+    setBusy(false, textOf(result) || 'That call failed.', true);
+    return;
+  }
+  const payload = parseResult<BoardPayload>(result);
   if (payload?.graph) render(payload);
 });
 

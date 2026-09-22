@@ -48,8 +48,8 @@ The graph element (`<dag-view>`) is vendored as a pinned submodule from the **pr
 machine needs GitHub access to that repo; Cloudflare does not.
 
 ```bash
-git clone --recurse-submodules https://github.com/wow-look-at-my/dag-mcp.git
-cd dag-mcp
+git clone --recurse-submodules https://github.com/wow-look-at-my/taskdag.git
+cd taskdag
 # or, in an existing clone:
 git submodule update --init
 npm install
@@ -72,10 +72,16 @@ deployment's database — it is an identifier, not a credential, and it has to b
 a Cloudflare Workers Build reads the binding straight out of the file. Deploying to a *different*
 account means creating your own database and replacing that id.
 
-The migration is **not** part of the deploy command, on purpose: a schema migration that runs on
-every push is a bad migration waiting to ship itself. Run `npm run migrate:remote` by hand after
-creating the database, and again whenever you add a migration. Until you do, the Worker deploys
-fine and every tool call fails with *no such table: graphs*.
+**A fresh database needs no migration step.** The Worker applies `migrations/0001_init.sql` — the
+file itself, imported as text, not a second copy of the DDL — on its first database call, and every
+statement in it is `CREATE ... IF NOT EXISTS`. So a deploy pointed at an empty D1 works
+immediately instead of answering *no such table: graphs* until somebody remembers `wrangler d1
+migrations apply`.
+
+That bootstrap covers the initial schema and nothing more. A **later** migration that alters
+existing tables still goes through `npm run migrate:remote`, deliberately: a schema change that
+runs itself on the first request is how you lose data at 3am. Running `migrations apply` on a
+bootstrapped database is a harmless no-op.
 
 ### 3. Run it
 
@@ -153,6 +159,19 @@ nothing written. Self-edges are illegal, duplicate edges are idempotent. A cance
 not count as satisfied. Reopening a done task does not reopen its dependents. Keys auto-assign
 `T1`, `T2`, … (next free number, gaps are never reused). Every batch is one transaction.
 
+## What the logs do not keep
+
+Cloudflare's automatic per-request invocation log records the full request URL — and here the URL
+path *is* the credential. Left on, anyone who can read the account's logs, or any Logpush
+destination downstream of them, would have permanent read/write on every graph that had been
+touched. So `wrangler.jsonc` sets `observability.logs.invocation_logs: false` and
+`redact_query_string: true`. Explicit `console.log` still works; this Worker writes none that carry
+a token, and no tool result, resource or App payload contains one either.
+
+Worth knowing about what *does* reach the Worker: requests arrive from Anthropic's cloud, so the
+client IP, ASN and geo in `request.cf` are Anthropic's shared egress rather than the end user's,
+and nothing in a request identifies a conversation.
+
 ## The App
 
 `ui://taskdag/board`, MIME `text/html;profile=mcp-app`, linked from `plan`, `ready` and `show` via
@@ -164,6 +183,12 @@ something.
 
 `_meta.ui.domain` is set, for Claude, to `sha256(<the public token URL>).hex[:32] +
 ".claudemcpcontent.com"` — per-graph, and not a way back to the token.
+
+**The card is dark unless the host proves otherwise.** Inside a sandboxed iframe,
+`prefers-color-scheme: light` is also what a browser reports when nobody has expressed a
+preference, and `getDocumentTheme()` reads an attribute rather than the media query and falls back
+to light — so neither can distinguish a light user from a silent host. Only `hostContext.theme`
+can, and anything short of it saying `"light"` leaves the card dark.
 
 Hosts that ignore MCP Apps lose nothing important: every tool still returns compact JSON, and
 Mermaid text for graphs up to 60 nodes.

@@ -5,7 +5,18 @@
   "compatibility_date": "2026-09-01",
   // The MCP SDK reaches for a few node builtins (crypto, buffer shims).
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // Invocation logs are OFF, and that is a security setting rather than a
+  // noise one: Cloudflare's automatic per-request log line records the full
+  // request URL, and in this design the URL path IS the credential. With
+  // them on, anyone who can read the account's logs — or any Logpush
+  // destination downstream of them — gets permanent read/write on every
+  // graph that has been touched. Explicit console logs still work; this
+  // Worker writes none that carry a token.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false },
+    "redact_query_string": true
+  },
 
   // Runs before wrangler bundles, on a laptop and in a Cloudflare Workers
   // Build alike. It is a no-op when node_modules is already there; on a
@@ -15,10 +26,11 @@
   // nothing here needs to build the UI.
   "build": { "command": "node scripts/ensure-deps.mjs" },
 
-  // The landing page and the compiled MCP App bundle are imported as
-  // strings, which is what makes the deployed Worker self-contained: no
-  // asset binding, no CDN, no runtime fetch of the viewer.
-  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": false }],
+  // The landing page, the compiled MCP App bundle and the schema migration
+  // are imported as strings, which is what makes the deployed Worker
+  // self-contained: no asset binding, no CDN, no runtime fetch of the
+  // viewer, and no schema retyped away from migrations/.
+  "rules": [{ "type": "Text", "globs": ["**/*.html", "**/*.sql"], "fallthrough": false }],
 
   "d1_databases": [
     {
