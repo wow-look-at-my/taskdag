@@ -17,16 +17,19 @@
 import { describe, expect, it } from 'vitest';
 
 import { client, textOf } from './mcp-client.ts';
+import READ_SCHEMA from '../src/schemas/read.json';
+import RESET_SCHEMA from '../src/schemas/reset.json';
+import WRITE_SCHEMA from '../src/schemas/write.json';
 
 /** 40 tasks in a chain, with titles the length people actually write. */
 const BIG = {
   title: 'Platform migration',
   tasks: Array.from({ length: 40 }, (_, i) => ({
-    key: `T${i + 1}`,
+    key: `step-${i + 1}`,
     title: `Task number ${i + 1} with a realistic title`,
     tags: ['area:backend'],
+    ...(i > 0 ? { parents: [`step-${i}`] } : {}),
   })),
-  edges: Array.from({ length: 39 }, (_, i) => ({ from: `T${i + 2}`, to: `T${i + 1}` })),
 };
 
 describe('context budget', () => {
@@ -34,13 +37,50 @@ describe('context budget', () => {
     const tools = await client().tools();
     const bytes = JSON.stringify(tools).length;
 
-    expect(tools).toHaveLength(11);
-    expect(bytes).toBeLessThan(10_000);
+    // Three tools, not ten: `read`, `write`, and `reset` on its own because
+    // hosts grant permission per tool name.
+    expect(tools.map((t) => t.name).sort()).toEqual(['read', 'reset', 'write']);
+    expect(bytes).toBeLessThan(5_000);
+
+    // A tool with no description is a tool a model has to guess at. Two of
+    // these shipped that way: the JSON carried `title` and the enum's
+    // description, and nothing filled the field the client actually shows.
+    for (const tool of tools) {
+      expect(tool.description, tool.name).toBeTruthy();
+      expect(tool.description.length, tool.name).toBeGreaterThan(40);
+      // The shared definitions in common.json are a source convenience. A
+      // client has no common.json and no way to ask for one, so what goes
+      // over the wire has to be self-contained — including the refs INSIDE
+      // a shared definition, which is where this first went wrong: `task`
+      // is built from `task_key`, `status` and the rest, and copying it
+      // without recursing shipped those inner refs.
+      expect(JSON.stringify(tool.inputSchema), tool.name).not.toContain('$ref');
+    }
+  });
+
+  it('keeps every description to one sentence', () => {
+    // Descriptions are paid for in every conversation, and a second
+    // sentence is almost always the first one restated.
+    const descriptions: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (node === null || typeof node !== 'object') return;
+      const record = node as Record<string, unknown>;
+      if (typeof record.description === 'string') descriptions.push(record.description);
+      Object.values(record).forEach(walk);
+    };
+    walk([READ_SCHEMA, WRITE_SCHEMA, RESET_SCHEMA]);
+
+    expect(descriptions.length).toBeGreaterThanOrEqual(15);
+    for (const description of descriptions) {
+      expect(description, description).not.toMatch(/[.!?]\s+[A-Z]/);
+      expect(description.length, description).toBeLessThanOrEqual(90);
+    }
   });
 
   it('answers a 40-task plan with a receipt, not a graph', async () => {
     const mcp = client();
-    const result = await mcp.tool('plan', BIG);
+    const result = await mcp.tool('write', { ...BIG });
     const text = textOf(result);
 
     // The graph this call just wrote is ~9kB of JSON. None of it is here.
@@ -51,34 +91,60 @@ describe('context budget', () => {
 
   it('answers show and ready in a couple of hundred characters', async () => {
     const mcp = client();
-    await mcp.json('plan', BIG);
+    await mcp.json('write', { ...BIG });
 
-    expect(textOf(await mcp.tool('show')).length).toBeLessThan(400);
-    expect(textOf(await mcp.tool('ready')).length).toBeLessThan(400);
+    expect(textOf(await mcp.tool('read', {})).length).toBeLessThan(400);
+    expect(textOf(await mcp.tool('read', {})).length).toBeLessThan(400);
   });
 
   it('never lets a single tool result carry the whole graph', async () => {
     const mcp = client();
-    const planned = await mcp.json<{ graph: string }>('plan', BIG);
+    const planned = await mcp.json<{ graph: string }>('write', { ...BIG });
 
     // Every tool, including the ones the board drives. The resource is the
     // only door to the full payload, and the model chooses to open it.
     for (const [name, args] of [
-      ['show', {}],
-      ['ready', { limit: 50 }],
-      ['link', { edges: [{ from: 'T1', to: 'T40' }] }],
-      ['update_task', { key: 'T1', status: 'done' }],
+      ['read', {}],
+      ['read', { limit: 50 }],
+      ['write', { tasks: [{ key: 'step-1', parents: { add: ['step-40'] } }] }],
+      ['write', { tasks: [{ key: 'step-1', status: 'done' }] }],
     ] as const) {
       const text = textOf(await mcp.tool(name, { graph: planned.graph, ...args }));
       expect(text.length, `${name} result`).toBeLessThan(700);
     }
   });
 
+  it('takes a title of any length, and repeats only the front of it', async () => {
+    const mcp = client();
+    const essay = `Rewrite the ingestion pipeline so ${'that '.repeat(60)}it stops dropping events`;
+
+    const planned = await mcp.json<{ graph: string }>('write', { 
+      title: 'Long titles',
+      tasks: [{ key: 'ingestion', title: essay, detail: 'x'.repeat(50_000) }],
+    });
+
+    // Stored whole: nothing was refused, and nothing was lost.
+    const graph = await mcp.readResource<{ nodes: { title: string; detail?: string }[] }>(`taskdag://graph/${planned.graph}`);
+    expect(graph.nodes[0].title).toBe(essay);
+    expect(graph.nodes[0].detail).toHaveLength(50_000);
+
+    // Repeated short: the receipt and the diagram are what cost per turn.
+    // A ~330-character title and a 50kB detail, and the receipt is still a
+    // receipt: the ellipsis is the proof it was shortened rather than refused.
+    const receipt = textOf(await mcp.tool('read', {  graph: planned.graph }));
+    expect(receipt.length).toBeLessThan(500);
+    expect(receipt).toContain('…');
+
+    const drawn = await mcp.json<{ mermaid: string }>('read', { include: ['summary', 'mermaid'],  graph: planned.graph });
+    expect(drawn.mermaid).toContain('…');
+    expect(drawn.mermaid.length).toBeLessThan(700);
+  });
+
   it('caps the one result that is meant to be read as text', async () => {
     const mcp = client();
-    await mcp.json('plan', BIG);
+    await mcp.json('write', { ...BIG });
 
-    const drawn = await mcp.json<{ mermaid: string | null; overflow?: true }>('mermaid');
+    const drawn = await mcp.json<{ mermaid: string | null; overflow?: true }>('read', { include: ['summary', 'mermaid'] });
 
     // 40 tasks fit; the cap is what stops 400 from arriving whole.
     expect(drawn.overflow).toBeUndefined();

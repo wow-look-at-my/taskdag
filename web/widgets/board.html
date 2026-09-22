@@ -57,7 +57,9 @@
       #graph {
         display: block;
         width: 100%;
-        height: 300px;
+        /* Set from the host's reported container size at connect time; the
+           fallback is what a host that reports nothing gets. */
+        height: var(--graph-height, 380px);
         border: 1px solid var(--line);
         border-radius: 8px;
         overflow: hidden;
@@ -117,14 +119,15 @@
          and status line then sit behind a full-bleed canvas, and a host that
          sizes the frame to its content sees the body collapse. Growing a
          height keeps every part of the card where it belongs. */
-      /* Expanded inside the card the host already gave us: taller, still
-         bounded, still in flow. */
-      :root[data-expanded] #graph { height: 520px; }
-      /* Expanded because the host actually handed over a full panel: fill
-         it, minus the chrome above and below. Keyed on the host's reported
-         mode rather than on our own request, so leaving fullscreen by the
-         host's own control puts the height back. */
-      :root[data-display='fullscreen'] #graph { height: calc(100vh - 150px); }
+      /* Three heights, in the order they win.
+         1. The host handed over a real panel: fill the viewport it gave us.
+         2. We asked to expand inside the inline card: at least 520.
+         3. Neither: whatever the host's container allows.
+         `max()` rather than cascade order, because a host that reports a
+         fullscreen mode without actually growing the frame would otherwise
+         SHRINK the graph at the moment it was asked to grow. */
+      :root[data-display='fullscreen'] #graph { height: max(calc(100vh - 150px), var(--graph-max, 520px)); }
+      :root[data-expanded] #graph { height: max(calc(100vh - 150px), var(--graph-max, 520px), 520px); }
       #refresh { margin-left: auto; }
       #copywrap { position: relative; }
       /* The menu opens UPWARDS. The body is overflow:hidden and the card is

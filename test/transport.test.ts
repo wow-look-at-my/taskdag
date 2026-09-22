@@ -129,7 +129,7 @@ async function receiptOf(res: Response): Promise<Record<string, unknown>> {
  * about the connection is involved.
  */
 async function graphKeys(e: { DB: D1Database }, token: string = TOKEN): Promise<string[]> {
-  const receipt = await receiptOf(await call(e, 'tools/call', { name: 'show', arguments: {} }, {}, token));
+  const receipt = await receiptOf(await call(e, 'tools/call', { name: 'read', arguments: {} }, {}, token));
   if (receipt.graph === null) return [];
   const uri = `taskdag://graph/${receipt.graph as string}`;
   const read = await result(await call(e, 'resources/read', { uri }, { 'mcp-name': uri }, token));
@@ -144,7 +144,7 @@ describe('sessions are not part of this transport', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get('mcp-session-id')).toBeNull();
-    expect(toolNames(await result(res))).toContain('plan');
+    expect(toolNames(await result(res))).toContain('write');
   });
 
   it('ignores an Mcp-Session-Id it is handed, and does not echo it', async () => {
@@ -220,8 +220,8 @@ describe('the URL is the identity', () => {
     const e = env();
 
     await call(e, 'tools/call', {
-      name: 'plan',
-      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
+      name: 'write',
+      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }] },
     });
 
     // Nothing links these two requests: no session, no cookie, no stream.
@@ -233,8 +233,8 @@ describe('the URL is the identity', () => {
     const e = env();
 
     await call(e, 'tools/call', {
-      name: 'plan',
-      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
+      name: 'write',
+      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }] },
     });
 
     expect(await graphKeys(e, OTHER_TOKEN)).toEqual([]);
