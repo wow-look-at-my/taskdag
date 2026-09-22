@@ -39,6 +39,48 @@ That URL is the connector URL, and it is also the password.
 - The trade versus OAuth: the host you paste it into (Anthropic, for claude.ai) stores the
   connector URL, so it stores the token.
 
+### There is no session to identify you by
+
+A remote MCP server has exactly one other place it could look for "who is this, and which working
+set": the transport. On protocol revision `2026-07-28` there is nothing there. The changelog's first
+entry is
+
+> Remove protocol-level sessions and the `Mcp-Session-Id` header from the Streamable HTTP transport.
+> [...] Servers that need cross-call state use explicit, server-minted handles passed as ordinary
+> tool arguments ([SEP-2567](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567)).
+
+and the Statelessness chapter closes the workarounds: a server **MUST NOT** rely on prior requests
+over the same connection to establish context *including client identity*, an open connection
+*"is not a conversation or session"*, and state spanning requests **MUST** be referenced by an
+explicit identifier the client passes every time. There is no conversation or thread id anywhere in
+`_meta` either — the reserved set is `protocolVersion`, `clientInfo`, `clientCapabilities`,
+`logLevel`, `subscriptionId` and `serverInfo`, and `clientInfo` is `{name, version}` (`"ClaudeAI"`),
+which is a product, not a person.
+
+So the two sanctioned answers are OAuth for *who* and a server-minted handle passed on every call
+for *which working set*. The token in the path is TaskDAG's handle: minted in your browser instead
+of by the server, and riding in the URL instead of in an argument, but read fresh from every single
+request, which is the property the rule is about. It is **not** authentication of a person — see the
+trade above.
+
+What the server does with the machinery that was removed, all pinned by `test/transport.test.ts`:
+
+| | |
+|---|---|
+| `Mcp-Session-Id` on a request | Ignored, never echoed. The spec's word is *"ignore it, and do not mint or echo session IDs"*. |
+| `GET` or `DELETE` on `/<token>/mcp` | `405`. Those were the standalone SSE stream and session termination. |
+| Response to any call | Carries no session id, on the modern revision and on the `2025-11-25` fallback alike. |
+
+That last row is why the tests exist: statelessness here is inherited from the SDK, not written in
+this repo, and an SDK upgrade that started minting session ids would quietly put a second, weaker
+handle on every graph — one a host could cache, log, or hand to a different chat.
+
+Worth knowing when reading logs: Claude Code still implements the *client* half of `2025-11-25`
+sessions (it stores an `mcp-session-id` from an initialize response, replays it, and on
+`404`/`"No valid session ID"` logs *"MCP session expired [...] triggering reconnection"* and
+re-initializes into a brand-new one). A session id is disposable connection state to the client
+that holds it, which is the practical reason it could never have been anyone's identity.
+
 ## Setup
 
 ### 1. Clone, with the submodule
@@ -201,7 +243,10 @@ npm run typecheck
 npm run check:board   # drives the compiled App in Chromium against a stand-in host
 ```
 
-`test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
+`test/transport.test.ts` drives the real Worker entry point against that same fake, and asserts the
+session rules above — no minted session id, an incoming one ignored, `405` on GET and DELETE, one
+graph per token across unrelated requests, and a preflight that allows the `Mcp-Method` / `Mcp-Name`
+headers every modern request now has to carry. `test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
 tests exercise the actual SQL rather than a second implementation of it. `scripts/check-board.mjs`
 loads the compiled bundle in a browser, completes the MCP Apps handshake, and asserts that the
 graph draws, that selection fetches detail through the host, and that **Done** leaves as a

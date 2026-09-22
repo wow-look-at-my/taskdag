@@ -48,6 +48,20 @@ export function handlerForToken(ctx: ToolContext, route: string) {
     // Claude reaches the Worker from Anthropic's cloud, and the App iframe
     // never talks to /mcp directly, so no browser Origin needs allowing
     // beyond the defaults.
-    corsOptions: { origin: '*', methods: 'GET,POST,OPTIONS', headers: 'Content-Type, Accept, Authorization, MCP-Protocol-Version, MCP-Session-Id' },
+    //
+    // The header list is what a browser-side client would be allowed to
+    // send, and on 2026-07-28 that has to include `Mcp-Method` and
+    // `Mcp-Name`: with the handshake gone, every request restates its
+    // method in a header and `tools/call` restates the tool name, and a
+    // preflight that withheld them would fail every modern call. Only POST
+    // is listed because GET and DELETE are 405 on this revision -- the GET
+    // SSE stream and DELETE session termination are 2025-11-25 mechanisms.
+    // `MCP-Session-Id` stays allowed rather than supported: an older client
+    // may send one, and the server ignores it (see test/transport.test.ts).
+    corsOptions: {
+      origin: '*',
+      methods: 'POST,OPTIONS',
+      headers: 'Content-Type, Accept, Authorization, MCP-Protocol-Version, MCP-Method, MCP-Name, MCP-Session-Id',
+    },
   });
 }
