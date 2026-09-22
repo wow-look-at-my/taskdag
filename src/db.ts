@@ -13,6 +13,7 @@
 
 import type { Edge, Task, TaskStatus } from './graph.ts';
 import { assignKeys, findCycle } from './graph.ts';
+import { ensureSchema } from './schema.ts';
 
 /** The whole working graph for one token, in key space. */
 export interface GraphState {
@@ -100,6 +101,7 @@ function ensureGraphStatement(db: D1Database, owner: string, title?: string): D1
 
 /** Reads the whole graph for one token. Never writes. */
 export async function loadGraph(db: D1Database, owner: string): Promise<GraphState> {
+  await ensureSchema(db);
   const [graphRow, taskRows, edgeRows] = await db.batch<unknown>([
     db.prepare('SELECT title FROM graphs WHERE owner_id = ?').bind(owner),
     db
@@ -150,6 +152,7 @@ export async function mergeGraph(
   owner: string,
   input: { title?: string; tasks?: TaskInput[]; edges?: Edge[] },
 ): Promise<MergeResult> {
+  await ensureSchema(db);
   const incomingTasks = input.tasks ?? [];
   const incomingEdges = input.edges ?? [];
 
@@ -254,6 +257,7 @@ function dedupeEdges(edges: readonly Edge[]): Edge[] {
 
 /** Removes edges. Missing edges are not an error — unlink is idempotent. */
 export async function unlinkEdges(db: D1Database, owner: string, edges: readonly Edge[]): Promise<number> {
+  await ensureSchema(db);
   const index = await keyIndex(db, owner);
   const statements: D1PreparedStatement[] = [];
   for (const edge of edges) {
@@ -269,6 +273,7 @@ export async function unlinkEdges(db: D1Database, owner: string, edges: readonly
 
 /** Patches one task. Absent fields are left alone. */
 export async function patchTask(db: D1Database, owner: string, key: string, patch: TaskPatch): Promise<Task> {
+  await ensureSchema(db);
   const index = await keyIndex(db, owner);
   const id = index.get(key);
   if (!id) throw new GraphError(`No task with key "${key}".`);
@@ -296,6 +301,7 @@ export async function patchTask(db: D1Database, owner: string, key: string, patc
 }
 
 export async function getTask(db: D1Database, owner: string, key: string): Promise<Task | null> {
+  await ensureSchema(db);
   const row = await db
     .prepare('SELECT id, key, title, detail, status, priority, tags FROM tasks WHERE owner_id = ? AND key = ?')
     .bind(owner, key)
@@ -316,6 +322,7 @@ export async function getTask(db: D1Database, owner: string, key: string): Promi
  * Scoped to one token: it cannot touch another graph even if it tried.
  */
 export async function resetGraph(db: D1Database, owner: string): Promise<{ tasks_deleted: number; edges_deleted: number }> {
+  await ensureSchema(db);
   const [edgeResult, taskResult] = await db.batch([
     db.prepare('DELETE FROM edges WHERE owner_id = ?').bind(owner),
     db.prepare('DELETE FROM tasks WHERE owner_id = ?').bind(owner),

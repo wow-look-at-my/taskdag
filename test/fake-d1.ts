@@ -87,10 +87,30 @@ class FakeD1 {
 
 const MIGRATION = fileURLToPath(new URL('../migrations/0001_init.sql', import.meta.url));
 
-/** A fresh in-memory database with the real schema applied. */
-export function createTestDb(): D1Database {
+/** The sqlite handle behind a fake, for tests that inspect the schema. */
+const handles = new WeakMap<object, DatabaseSync>();
+
+export function rawDb(db: D1Database): DatabaseSync {
+  const handle = handles.get(db as unknown as object);
+  if (!handle) throw new Error('not a test database');
+  return handle;
+}
+
+/**
+ * A fresh in-memory database.
+ *
+ * `migrated: false` gives an EMPTY one — a deployed Worker pointed at a D1
+ * database nobody ran migrations against, which is the case src/schema.ts
+ * exists to survive.
+ */
+export function createTestDb({ migrated = true }: { migrated?: boolean } = {}): D1Database {
   const db = new DatabaseSync(':memory:');
+  // sqlite defaults foreign keys OFF; D1 has them on, so the fake matches D1
+  // rather than sqlite. The migration itself carries no PRAGMA (remote D1
+  // rejects them), so it is set here instead.
   db.exec('PRAGMA foreign_keys = ON');
-  db.exec(readFileSync(MIGRATION, 'utf8'));
-  return new FakeD1(db) as unknown as D1Database;
+  if (migrated) db.exec(readFileSync(MIGRATION, 'utf8'));
+  const fake = new FakeD1(db) as unknown as D1Database;
+  handles.set(fake as unknown as object, db);
+  return fake;
 }
