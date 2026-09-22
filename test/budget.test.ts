@@ -34,13 +34,15 @@ describe('context budget', () => {
     const tools = await client().tools();
     const bytes = JSON.stringify(tools).length;
 
-    expect(tools).toHaveLength(10);
-    expect(bytes).toBeLessThan(10_000);
+    // Three tools, not ten: `read`, `write`, and `reset` on its own because
+    // hosts grant permission per tool name.
+    expect(tools.map((t) => t.name).sort()).toEqual(['read', 'reset', 'write']);
+    expect(bytes).toBeLessThan(8_000);
   });
 
   it('answers a 40-task plan with a receipt, not a graph', async () => {
     const mcp = client();
-    const result = await mcp.tool('plan', BIG);
+    const result = await mcp.tool('write', { op: 'plan', ...BIG });
     const text = textOf(result);
 
     // The graph this call just wrote is ~9kB of JSON. None of it is here.
@@ -51,23 +53,23 @@ describe('context budget', () => {
 
   it('answers show and ready in a couple of hundred characters', async () => {
     const mcp = client();
-    await mcp.json('plan', BIG);
+    await mcp.json('write', { op: 'plan', ...BIG });
 
-    expect(textOf(await mcp.tool('show')).length).toBeLessThan(400);
-    expect(textOf(await mcp.tool('ready')).length).toBeLessThan(400);
+    expect(textOf(await mcp.tool('read', { what: 'board' })).length).toBeLessThan(400);
+    expect(textOf(await mcp.tool('read', { what: 'ready' })).length).toBeLessThan(400);
   });
 
   it('never lets a single tool result carry the whole graph', async () => {
     const mcp = client();
-    const planned = await mcp.json<{ graph: string }>('plan', BIG);
+    const planned = await mcp.json<{ graph: string }>('write', { op: 'plan', ...BIG });
 
     // Every tool, including the ones the board drives. The resource is the
     // only door to the full payload, and the model chooses to open it.
     for (const [name, args] of [
-      ['show', {}],
-      ['ready', { limit: 50 }],
-      ['plan', { edges: [{ from: 'step-1', to: 'step-40' }] }],
-      ['update_task', { key: 'step-1', status: 'done' }],
+      ['read', { what: 'board' }],
+      ['read', { what: 'ready', limit: 50 }],
+      ['write', { op: 'plan', edges: [{ from: 'step-1', to: 'step-40' }] }],
+      ['write', { op: 'update', key: 'step-1', status: 'done' }],
     ] as const) {
       const text = textOf(await mcp.tool(name, { graph: planned.graph, ...args }));
       expect(text.length, `${name} result`).toBeLessThan(700);
@@ -78,7 +80,7 @@ describe('context budget', () => {
     const mcp = client();
     const essay = `Rewrite the ingestion pipeline so ${'that '.repeat(60)}it stops dropping events`;
 
-    const planned = await mcp.json<{ graph: string }>('plan', {
+    const planned = await mcp.json<{ graph: string }>('write', { op: 'plan', 
       title: 'Long titles',
       tasks: [{ key: 'ingestion', title: essay, detail: 'x'.repeat(50_000) }],
     });
@@ -91,20 +93,20 @@ describe('context budget', () => {
     // Repeated short: the receipt and the diagram are what cost per turn.
     // A ~330-character title and a 50kB detail, and the receipt is still a
     // receipt: the ellipsis is the proof it was shortened rather than refused.
-    const receipt = textOf(await mcp.tool('ready', { graph: planned.graph }));
+    const receipt = textOf(await mcp.tool('read', { what: 'ready',  graph: planned.graph }));
     expect(receipt.length).toBeLessThan(500);
     expect(receipt).toContain('…');
 
-    const drawn = await mcp.json<{ mermaid: string }>('mermaid', { graph: planned.graph });
+    const drawn = await mcp.json<{ mermaid: string }>('read', { what: 'mermaid',  graph: planned.graph });
     expect(drawn.mermaid).toContain('…');
     expect(drawn.mermaid.length).toBeLessThan(700);
   });
 
   it('caps the one result that is meant to be read as text', async () => {
     const mcp = client();
-    await mcp.json('plan', BIG);
+    await mcp.json('write', { op: 'plan', ...BIG });
 
-    const drawn = await mcp.json<{ mermaid: string | null; overflow?: true }>('mermaid');
+    const drawn = await mcp.json<{ mermaid: string | null; overflow?: true }>('read', { what: 'mermaid' });
 
     // 40 tasks fit; the cap is what stops 400 from arriving whole.
     expect(drawn.overflow).toBeUndefined();

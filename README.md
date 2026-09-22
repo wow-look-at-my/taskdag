@@ -205,28 +205,40 @@ An edge `{ from, to }` reads **"`from` depends on `to`"**: `to` must be done bef
 start. Mermaid output and the board both draw it the other way round — prerequisite first — because
 that is the direction work flows.
 
-| Tool | What it does | Destructive |
-|---|---|---|
-| `plan` | Create/update tasks **and** edges in one call. **Merges — never deletes.** `new_graph: true` starts a separate plan. Renders the board. | no |
-| `unlink` | Remove dependency edges. The tasks stay. Adding edges is `plan`. | edges only |
-| `ready` | Tasks that can start now: `todo` with every dependency `done`. Renders the board. | no |
-| `update_task` | Change one task's status, title, detail, priority or tags. | no |
-| `get_task` | One task in full, with dependencies, dependents and what is blocking it. | no |
-| `show` | Draw the board, return the summary. | no |
-| `mermaid` | The graph as a diagram — selectable, and capped. See below. | no |
-| `graphs` | Every **non-empty** graph on this connector: handle, title, task count. | no |
-| `reset` | **Empties one graph.** Requires `{ "confirm": "RESET" }`. The handle survives. | **yes** |
+| Tool | Branch | What it does | Destructive |
+|---|---|---|---|
+| `read` | `what="board"` | Counts, ready queue, and draws the card. | no |
+| | `what="ready"` | Tasks that can start now: `todo` with every dependency `done`. | no |
+| | `what="task"` | One task whole — detail, dependencies, dependents, what blocks it. | no |
+| | `what="graphs"` | Every **non-empty** graph here: handle, title, task count. | no |
+| | `what="mermaid"` | The graph as a diagram — selectable and capped, see below. | no |
+| `write` | `op="plan"` | Create/update tasks **and** edges. **Merges — never deletes.** `new_graph` starts a separate plan. | no |
+| | `op="update"` | Change one task's status, title, detail, priority or tags. | no |
+| | `op="unlink"` | Remove dependency edges. The tasks stay. | edges only |
+| `reset` | | **Empties a graph**, which is also how one is deleted. Needs `{ "confirm": "RESET" }` and an explicit handle. | **yes** |
 
-`delete_graph` is the one tool with **no default handle**: every other tool falls back to your most
-recent graph, and a default that empties the wrong one is recoverable where a default that deletes
-it is not. An emptied graph drops out of `graphs` — a list filling up with the husks of `reset`
-calls is a list nobody can read — but its handle keeps working, and writing to it puts it back.
-Resolution is deliberately not filtered the same way: clear a graph and add to it without naming
-it, and you land back in the one you just cleared rather than silently in an older one.
+**Three tools, not ten.** Ten names cost about ten bytes each and carried a lot of meaning, so
+collapsing them is worth less than the count suggests — measured, 7.3kB against 9.2kB. What it buys
+is one door in, one door out, and no two tools that do the same thing, which is the bug both
+`add_tasks` and `link` were.
 
-`reset` is a separate tool rather than a `mode` on `plan` on purpose: hosts grant permission per
-tool *name*, so this is what lets you auto-approve `plan` while `reset` still stops and asks.
-`plan` has no replace or wipe flag at all.
+**`reset` is not a branch of `write`.** Hosts grant permission per tool *name*, and
+`destructiveHint` is per tool too. One writer would make "you may tick tasks off" and "you may wipe
+the graph" the same grant, and would have to be marked either always destructive (every edit
+prompts) or never (a wipe does not). It is also the one call with **no default handle**: a default
+that empties the wrong graph is not recoverable.
+
+**There is no `delete_graph`.** An emptied graph drops out of `read(what="graphs")` — a list
+filling up with the husks of resets is a list nobody can read — so emptying already *is* deleting.
+The handle keeps working, and writing to it puts the graph back. Resolution is deliberately not
+filtered the same way: clear a graph and add to it without naming one, and you land back in the one
+you just cleared rather than silently in an older one.
+
+**The schemas are JSON, not zod.** `src/tool-schemas.json` is registered verbatim through
+`fromJsonSchema`, so what a client sees is that file — including `allOf`/`if`/`then`, which says
+"`key` is required when `what="task"`" in the schema rather than in prose a model has to infer.
+Hosts are not obliged to enforce conditionals, so every branch is re-checked in the handler and
+answers with a message naming what was missing.
 
 Resources: `taskdag://graph/<handle>` (every node and edge — the payload the tools leave out),
 `taskdag://me` (identity, never the token) and `ui://taskdag/board` (the MCP App).
@@ -269,7 +281,7 @@ quietly cost thousands of tokens. So:
 |---|---|---|
 | `key` | 2–64 chars, **required** | Every result, the diagram, the board, and how everything refers to the task |
 | `title` | none | Receipts and diagram labels, **shortened to 80 chars** where they repeat |
-| `detail` | none | The graph resource, `get_task`, the board's selection panel — **never** a tool result |
+| `detail` | none | `read(what="task")`, the graph resource, the board's selection panel — left out of receipts |
 | `tags` | 20 × 40 chars | The graph resource and the board |
 | `priority` | any integer | Ready-queue order |
 | per call | 200 tasks, 400 edges | One `db.batch`, which is one transaction |

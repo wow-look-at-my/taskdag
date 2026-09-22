@@ -135,7 +135,7 @@ const HOST_PAGE = `<!doctype html>
         result(msg.id, { isError: true, content: [{ type: 'text', text: 'D1_ERROR: no such table: graphs: SQLITE_ERROR' }] });
         return;
       }
-      if (name === 'get_task') {
+      if (name === 'read' && msg.params.arguments.what === 'task') {
         const key = msg.params.arguments.key;
         const node = GRAPH.nodes.find((n) => n.key === key);
         result(msg.id, {
@@ -149,7 +149,7 @@ const HOST_PAGE = `<!doctype html>
         });
         return;
       }
-      if (name === 'update_task') {
+      if (name === 'write' && msg.params.arguments.op === 'update') {
         // Stateful on purpose: a host that forgets the write cannot catch a
         // board that re-draws from a stale result.
         const key = msg.params.arguments.key;
@@ -244,20 +244,24 @@ check('detail arrived via get_task through the host', true);
 await view.locator('#done').click();
 await view.locator('#selected .pill').filter({ hasText: 'done' }).waitFor({ timeout: 5000 });
 const calls = await page.evaluate(() => window.__calls);
-const update = calls.find((c) => c.name === 'update_task');
-check('Done called update_task through the host', update?.arguments.key === 'homepage' && update?.arguments.status === 'done', JSON.stringify(calls));
+const update = calls.find((c) => c.name === 'write' && c.arguments.op === 'update');
+check('Done wrote through the host', update?.arguments.key === 'homepage' && update?.arguments.status === 'done', JSON.stringify(calls));
 // A card outlives its turn, and nothing about the connection says which
 // graph it was drawing. So every call has to name one -- except the very
 // first, made by a cold-mounted card that has not been told a handle yet
 // and is asking the server for its most recent graph.
 const [coldMount, ...afterReceipt] = calls;
-check('the cold-mount refresh asks without a handle', coldMount.name === 'show' && coldMount.arguments.graph === undefined, JSON.stringify(coldMount));
+check(
+  'the cold-mount refresh asks without a handle',
+  coldMount.name === 'read' && coldMount.arguments.what === 'board' && coldMount.arguments.graph === undefined,
+  JSON.stringify(coldMount),
+);
 check('every later tool call names the graph handle', afterReceipt.every((c) => c.arguments.graph === HANDLE), JSON.stringify(afterReceipt));
 check('the board re-drew after the write', (await view.locator('#done').textContent()) === 'Reopen');
 
 await view.locator('#refresh').click();
-await page.waitForFunction(() => window.__calls.some((c) => c.name === 'show'), null, { timeout: 5000 });
-check('Refresh called show', true);
+await page.waitForFunction(() => window.__calls.some((c) => c.name === 'read' && c.arguments.what === 'board'), null, { timeout: 5000 });
+check('Refresh re-read the board', true);
 
 // 4. Copy: a canvas has no selectable text, so the card has to hand it over.
 await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: `http://127.0.0.1:${port}` });

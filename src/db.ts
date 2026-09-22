@@ -214,18 +214,6 @@ export async function listGraphs(db: D1Database, owner: string): Promise<GraphSu
   return results.map((row) => ({ id: row.id, title: row.title, updated_at: row.updated_at, tasks: row.tasks ?? 0 }));
 }
 
-/**
- * Deletes a graph and everything under it. Cascades do the children.
- *
- * `resolveGraph` throws for a handle that is unknown or belongs to another
- * token, so reaching the DELETE at all means the handle is this owner's.
- */
-export async function deleteGraph(db: D1Database, owner: string, handle: string): Promise<boolean> {
-  const graph = await resolveGraph(db, owner, handle);
-  const result = await db.prepare('DELETE FROM graph_handles WHERE id = ? AND owner_id = ?').bind(graph!.id, owner).run();
-  return (result.meta.changes ?? 0) > 0;
-}
-
 /** Marks a graph as the owner's most recent, which is what `resolveGraph` picks by default. */
 function touchStatement(db: D1Database, graph: string, title?: string): D1PreparedStatement {
   const ts = now();

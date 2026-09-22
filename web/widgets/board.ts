@@ -149,6 +149,24 @@ const copyBtn = document.getElementById('copy') as HTMLButtonElement;
 const expandBtn = document.getElementById('expand') as HTMLButtonElement;
 const copyMenu = document.getElementById('copymenu') as HTMLDivElement;
 
+/** A canvas smaller than this is not worth drawing a graph on. */
+const MIN_GRAPH_HEIGHT = 300;
+/** Breathing room above and below the drawn graph. */
+const GRAPH_PADDING = 24;
+/**
+ * How often a size change is allowed to reach the host.
+ *
+ * Every height change is a `postMessage` and a re-layout of the whole
+ * conversation around the card, so a pinch-zoom at one update per frame
+ * would ask the host to reflow sixty times a second. This coalesces the
+ * gesture and a final update lands when it settles, which is the frame that
+ * actually has to be exact.
+ */
+const RESIZE_INTERVAL_MS = 100;
+
+/** Everything around the graph, measured once. See `applyContainerSize`. */
+let chromeHeight: number | null = null;
+
 /** The graph the receipt pointed at, kept for the copy formats. */
 let graphData: GraphData | null = null;
 
@@ -315,7 +333,7 @@ async function applyReceipt(receipt: Receipt): Promise<void> {
 
 async function loadDetail(key: string): Promise<void> {
   try {
-    const detail = await callTool<TaskDetail>('get_task', { key });
+    const detail = await callTool<TaskDetail>('read', { what: 'task', key });
     if (detail && selectedKey === key) renderSelected(detail);
   } catch {
     // A detail panel that cannot load is a thinner panel, not a broken board.
@@ -325,7 +343,7 @@ async function loadDetail(key: string): Promise<void> {
 async function update(key: string, status: string): Promise<void> {
   setBusy(true, `Setting ${key} to ${status.replace('_', ' ')}…`);
   try {
-    const receipt = await callTool<Receipt>('update_task', { key, status });
+    const receipt = await callTool<Receipt>('write', { op: 'update', key, status });
     if (receipt) await applyReceipt(receipt);
     setBusy(false, '');
     if (selectedKey) void loadDetail(selectedKey);
@@ -337,7 +355,7 @@ async function update(key: string, status: string): Promise<void> {
 async function refresh(): Promise<void> {
   setBusy(true, 'Refreshing…');
   try {
-    const receipt = await callTool<Receipt>('show', {});
+    const receipt = await callTool<Receipt>('read', { what: 'board' });
     if (receipt) await applyReceipt(receipt);
     setBusy(false, '');
   } catch (err) {
@@ -496,6 +514,40 @@ function applyDisplayMode(context: McpUiHostContext | undefined): void {
   const mode = context?.displayMode ?? 'inline';
   document.documentElement.setAttribute('data-display', mode);
   if (mode !== 'fullscreen' && expandBtn.getAttribute('aria-pressed') === 'true') setExpanded(false);
+  applyContainerSize(context);
+}
+
+/**
+ * TAKE THE ROOM THE HOST OFFERS.
+ *
+ * The card used to hardcode a 300px graph, which is a number this file made
+ * up: `autoResize` reports whatever height we lay out and the host honours
+ * it up to the `containerDimensions` it advertises. Asking for 300 when the
+ * host was offering 520 is why the board looked like a stamp.
+ *
+ * So the graph is sized from what the host says it has, minus the chrome
+ * above and below it, with a floor so a host that reports something tiny
+ * still gets a usable canvas rather than a sliver. A host that reports
+ * nothing keeps a sensible default instead of the old small one.
+ */
+function applyContainerSize(context: McpUiHostContext | undefined): void {
+  const dimensions = context?.containerDimensions;
+  // Two flavours, and the host picks: a fixed `height` it has already
+  // decided, or a `maxHeight` ceiling. There is no "recommended size" in
+  // the protocol. For a graph canvas both mean the same thing — use it.
+  const available = dimensions === undefined ? undefined : 'height' in dimensions ? dimensions.height : dimensions.maxHeight;
+  if (typeof available !== 'number' || !Number.isFinite(available)) return;
+
+  // Chrome is measured ONCE. Measuring it again later reads a layout that
+  // has since changed — a task selected, a status line filled — and the
+  // card would settle at a different height every time the host spoke,
+  // never returning to the size it started at.
+  if (chromeHeight === null) chromeHeight = Math.max(0, document.body.scrollHeight - graphEl.getBoundingClientRect().height);
+  // `--graph-max` is the CEILING the host allows; `--graph-height` is what
+  // the graph actually asked for within it. Two variables because the
+  // expanded and fullscreen rules need the ceiling to push against.
+  document.documentElement.style.setProperty('--graph-max', `${Math.max(MIN_GRAPH_HEIGHT, Math.round(available - chromeHeight))}px`);
+  syncHeight();
 }
 
 expandBtn.addEventListener('click', () => {
@@ -510,6 +562,87 @@ expandBtn.addEventListener('click', () => {
     // is still the useful half of what was asked for.
   });
 });
+
+// -- Autosizing ---------------------------------------------------------------------------
+
+/**
+ * The card is as tall as the graph drawn in it, within what the host allows.
+ *
+ * WHY NOT JUST A FIXED HEIGHT. A four-task plan in a 520px box is mostly
+ * empty box, and a forty-task plan in the same box is a keyhole. The drawn
+ * height is known — `snapshot.bounds` is the world the layout settled on and
+ * `viewport.scale` is what it is being drawn at — so the card can be the
+ * size of its contents instead of a number this file guessed.
+ *
+ * The clamps are what keep that honest: never below `MIN_GRAPH_HEIGHT`, and
+ * never past the container the host advertised, because growing the card to
+ * fit a zoomed-in graph without a ceiling is how a chat card eats a screen.
+ */
+let worldHeight: number | null = null;
+let lastSentHeight = 0;
+let resizeTimer: number | null = null;
+
+function graphCeiling(): number {
+  const style = getComputedStyle(document.documentElement).getPropertyValue('--graph-max').trim();
+  const allowed = Number.parseInt(style, 10);
+  return Number.isFinite(allowed) && allowed > 0 ? allowed : 520;
+}
+
+/** The height the graph would like, clamped to what it may have. */
+function wantedHeight(): number {
+  if (worldHeight === null) return graphCeiling();
+  const drawn = worldHeight * graphEl.viewport.scale + GRAPH_PADDING * 2;
+  return Math.round(Math.min(graphCeiling(), Math.max(MIN_GRAPH_HEIGHT, drawn)));
+}
+
+/**
+ * Applies that height, at most once per `RESIZE_INTERVAL_MS`, and always
+ * once more when the gesture stops. `autoResize` is on, so setting it here
+ * is what tells the host — there is no second call to make.
+ */
+function syncHeight(): void {
+  const height = wantedHeight();
+  if (Math.abs(height - lastSentHeight) < 2) return;
+  if (resizeTimer !== null) return;
+  lastSentHeight = height;
+  // A custom property, not an inline height: the expanded and fullscreen
+  // rules are written in terms of it, and an inline style would beat them.
+  document.documentElement.style.setProperty('--graph-height', `${height}px`);
+  resizeTimer = window.setTimeout(() => {
+    resizeTimer = null;
+    // The trailing edge: the zoom may have moved on while we were waiting.
+    if (Math.abs(wantedHeight() - lastSentHeight) >= 2) syncHeight();
+  }, RESIZE_INTERVAL_MS);
+}
+
+/** A new layout means a new world to measure. */
+graphEl.addEventListener('layoutchange', () => {
+  worldHeight = graphEl.snapshot.bounds.h;
+  syncHeight();
+});
+
+/**
+ * Zoom is observed, not subscribed to: the element emits `layoutchange` and
+ * `selectionchange` but nothing for the viewport, and both the wheel and the
+ * toolbar's +/- change it. So after any interaction with the canvas, watch
+ * the scale for a moment and stop once it settles — a permanent animation
+ * frame loop to catch an occasional pinch is not a trade worth making.
+ */
+let watchUntil = 0;
+function watchZoom(): void {
+  const started = watchUntil;
+  watchUntil = Date.now() + 500;
+  if (started > Date.now()) return;
+  const tick = () => {
+    syncHeight();
+    if (Date.now() < watchUntil) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+for (const type of ['wheel', 'click', 'keyup', 'pointerup'] as const) {
+  graphEl.addEventListener(type, watchZoom, { passive: true });
+}
 
 // -- Theme -------------------------------------------------------------------------------
 
