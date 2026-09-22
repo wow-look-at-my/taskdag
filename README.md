@@ -77,10 +77,24 @@ npm run dev        # builds the App bundle, then wrangler dev
 npm run deploy     # builds, then wrangler deploy
 ```
 
-Deploys can also come from the **Cloudflare Git integration** — there is deliberately no GitHub
-Actions deploy workflow here. Because `js-snippets` is private, a Cloudflare build cannot check out
-the submodule, so the compiled App bundle (`dist/ui/board.html`) is **committed**. Run
-`npm run build:ui` and commit the result whenever the widget or the submodule SHA changes.
+### Deploying from the Cloudflare Git integration
+
+Deploys come from the **Cloudflare Git integration** — there is deliberately no GitHub Actions
+deploy workflow here. Two things make that work with no dashboard configuration beyond the deploy
+command:
+
+- **The compiled App bundle is committed** (`dist/ui/board.html`). `js-snippets` is private, and a
+  Cloudflare build has no credentials for it, so it cannot check out the submodule to rebuild the
+  widget. Run `npm run build:ui` and commit the result whenever the widget or the submodule SHA
+  changes.
+- **`wrangler.jsonc` installs its own dependencies.** A Workers Build runs the deploy command
+  (`npx wrangler versions upload`) against a bare clone with no `node_modules`; wrangler's
+  `build.command` hook (`scripts/ensure-deps.mjs`) installs the runtime dependencies first, and
+  no-ops when they are already present, so it costs nothing locally.
+
+**Point the integration at a branch that actually has the code.** A build against a branch without
+`wrangler.jsonc` fails with *"Missing entry-point to Worker script"* — that error means the wrong
+branch, not a broken config.
 
 ### 4. Mint a URL and connect
 
