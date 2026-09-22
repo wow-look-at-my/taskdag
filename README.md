@@ -128,6 +128,12 @@ call. So a deploy pointed at an empty D1 works immediately instead of answering 
 graphs* until somebody remembers `wrangler d1 migrations apply`, and an existing deployment picked
 up `0002_graph_handles.sql` on its next request with its graphs intact.
 
+The bootstrap splits in two: 0002's `CREATE`s always run, and the **legacy half** — 0001's DDL and
+0002's backfill out of it — runs only while `graphs`/`tasks`/`edges` are still present. So a fresh
+deployment never creates 0001's tables just to leave them empty, and once `0003` has dropped them
+the next cold start skips that half instead of recreating what was dropped. That conditional is
+what makes 0003 mean anything.
+
 That is possible because **every statement in `migrations/` is idempotent**: `CREATE ... IF NOT
 EXISTS`, or a backfill whose `WHERE NOT EXISTS` makes a second run do nothing. `0002` adds tables
 beside `0001`'s and copies the rows across rather than rebuilding them, which is what makes it safe
@@ -136,8 +142,12 @@ between a bootstrap and a duplicated graph.
 
 A migration that **alters or drops** an existing table is a different animal and still goes through
 `npm run migrate:remote` by hand, deliberately: a schema change that runs itself on the first
-request is how you lose data at 3am. Dropping 0001's now-unused `graphs`/`tasks`/`edges` tables is
-that kind of migration, and is deliberately not written yet. Running `migrations apply` on a
+request is how you lose data at 3am. `0003_drop_legacy_tables.sql` drops 0001's now-unused
+`graphs`/`tasks`/`edges`, and is **deliberately absent from `src/schema.ts`'s migration list** so
+the bootstrap can never run it; a test fails if it is added, or if any statement on the bootstrap
+path is a `DROP`/`ALTER`. Run it by hand once you are satisfied the copy landed — those three
+tables are still the only copy of the pre-handle rows, since 0002 copied rather than moved them,
+and the file carries the query to check that with. Running `migrations apply` on a
 bootstrapped database is a harmless no-op.
 
 ### 3. Run it
@@ -203,8 +213,16 @@ that is the direction work flows.
 | `get_task` | One task in full, with dependencies, dependents and what is blocking it. | no |
 | `show` | Draw the board, return the summary. | no |
 | `mermaid` | The graph as a diagram — selectable, and capped. See below. | no |
-| `graphs` | Every graph on this connector: handle, title, task count. | no |
+| `graphs` | Every **non-empty** graph on this connector: handle, title, task count. | no |
+| `delete_graph` | **Removes a graph entirely**, handle included. Requires `{ "confirm": "DELETE" }` and an explicit handle. | **yes** |
 | `reset` | **Empties one graph.** Requires `{ "confirm": "RESET" }`. The handle survives. | **yes** |
+
+`delete_graph` is the one tool with **no default handle**: every other tool falls back to your most
+recent graph, and a default that empties the wrong one is recoverable where a default that deletes
+it is not. An emptied graph drops out of `graphs` — a list filling up with the husks of `reset`
+calls is a list nobody can read — but its handle keeps working, and writing to it puts it back.
+Resolution is deliberately not filtered the same way: clear a graph and add to it without naming
+it, and you land back in the one you just cleared rather than silently in an older one.
 
 `reset` is a separate tool rather than a `mode` on `plan` on purpose: hosts grant permission per
 tool *name*, so this is what lets you auto-approve `plan` while `reset` still stops and asks.
@@ -281,8 +299,22 @@ preference, and `getDocumentTheme()` reads an attribute rather than the media qu
 to light — so neither can distinguish a light user from a silent host. Only `hostContext.theme`
 can, and anything short of it saying `"light"` leaves the card dark.
 
+**Getting things out of it.** The graph is painted on a canvas, so there is no text to select —
+**Copy** offers three shapes instead: *Markdown* (a checklist, with each task's prerequisites under
+it), *Mermaid* (a diagram) and *JSON* (the raw graph). The Mermaid comes from `src/graph.ts`'s own
+renderer, compiled into the bundle: `graph.ts` is pure, so the Worker and the App share one
+implementation rather than drifting apart as two. `navigator.clipboard` needs a permission the
+host's sandbox may withhold, so there is an `execCommand` fallback and, if both fail, the card says
+so rather than silently doing nothing.
+
+**Making it bigger.** `<dag-view>` brings its own fit, zoom and orientation buttons, and its
+fullscreen button is now enabled — it fills the iframe. Because the iframe is only as big as the
+host made the card, toggling it also asks the host for the matching display mode
+(`ui/request-display-mode`). A host that offers no fullscreen mode, or declines, still gets the
+in-iframe fill: the request never blocks the toggle.
+
 Hosts that ignore MCP Apps lose nothing important: every tool still returns compact JSON, and
-Mermaid text for graphs up to 60 nodes.
+`mermaid` renders the same diagram on demand.
 
 ## Tests
 
@@ -302,13 +334,14 @@ database — 0001's tables with rows in them — to prove the backfill gives an 
 without losing or duplicating it, however many times a cold start replays it. `test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
 tests exercise the actual SQL rather than a second implementation of it. `scripts/check-board.mjs`
 loads the compiled bundle in a browser, completes the MCP Apps handshake, and asserts that the
-graph draws, that selection fetches detail through the host, and that **Done** leaves as a
-`tools/call`. On a machine whose Chromium lives outside `node_modules`, point it at one:
+graph draws, that selection fetches detail through the host, that **Done** leaves as a
+`tools/call`, that each **Copy** format lands in a real clipboard, and that fullscreen negotiates a
+display mode with the host. On a machine whose Chromium lives outside `node_modules`, point it at one:
 `CHROME_PATH=/path/to/chromium npm run check:board`.
 
 ## Manual check list
 
-1. MCP Inspector against a minted `/<token>/mcp`: `tools/list` shows ten tools, `resources/list`
+1. MCP Inspector against a minted `/<token>/mcp`: `tools/list` shows eleven tools, `resources/list`
    shows `ui://taskdag/board` with MIME `text/html;profile=mcp-app`, and reading
    `taskdag://graph/<handle>` from a `plan` result returns that graph whole.
 2. Claude.ai (or the Cloudflare AI Playground): after `plan`, the board renders inline.

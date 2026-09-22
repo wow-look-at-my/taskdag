@@ -14,13 +14,21 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb, rawDb } from './fake-d1.ts';
-import { SCHEMA_STATEMENTS, ensureSchema } from '../src/schema.ts';
-import { listGraphs, loadGraph, mergeGraph, resolveGraph } from '../src/db.ts';
+import { SCHEMA_STATEMENTS, ensureSchema, statementsOf } from '../src/schema.ts';
+import dropSql from '../migrations/0003_drop_legacy_tables.sql';
+import { createGraph, deleteGraph, listGraphs, loadGraph, mergeGraph, resolveGraph } from '../src/db.ts';
 
 const TOKEN = 'kJ3nQ7vB9xZp2LmR8tW4yU6iO1aS5dF0gH-_cVbNxQe';
 const OTHER_TOKEN = 'zX9wQ2eR5tY7uI0oP3aS6dF8gH1jK4lZ-_cVbNmQwEr';
 
 let db: D1Database;
+
+function tableNames(handle: D1Database): string[] {
+  return rawDb(handle)
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
 
 /** Writes rows exactly as the pre-handle code did: keyed by the token. */
 function legacyGraph(owner: string, title: string, keys: string[], edges: [string, string][]): void {
@@ -90,6 +98,37 @@ describe('0002 backfill', () => {
     expect((await loadGraph(db, first[0].id)).tasks).toHaveLength(3);
   });
 
+  it('does not resurrect the legacy tables once 0003 has dropped them', async () => {
+    await ensureSchema(db);
+    const before = await listGraphs(db, TOKEN);
+    expect(before).toHaveLength(1);
+
+    // Run 0003 the way `wrangler d1 migrations apply` would.
+    for (const statement of statementsOf(dropSql)) rawDb(db).exec(statement);
+    expect(rawDb(db).prepare("SELECT name FROM sqlite_master WHERE name = 'graphs'").all()).toHaveLength(0);
+
+    // A cold start is a fresh isolate against the same database: no memo,
+    // so the whole bootstrap runs again. It used to recreate what 0003 had
+    // just dropped, which made the migration pointless.
+    const coldStart = Object.create(db) as D1Database;
+    await ensureSchema(coldStart);
+
+    expect(tableNames(db)).not.toContain('graphs');
+    expect(tableNames(db)).not.toContain('tasks');
+    expect(await listGraphs(coldStart, TOKEN)).toEqual(before);
+  });
+
+  it('never creates the legacy tables on a database that never had them', async () => {
+    const fresh = createTestDb({ migrated: false });
+
+    await ensureSchema(fresh);
+
+    // A new deployment has no pre-handle past to carry forward, so it gets
+    // the current schema and nothing else.
+    expect(tableNames(fresh)).toEqual(expect.arrayContaining(['graph_handles', 'graph_tasks', 'graph_edges']));
+    expect(tableNames(fresh)).not.toContain('graphs');
+  });
+
   it('keeps serving the migrated graph as the default, with no handle passed', async () => {
     const graph = await resolveGraph(db, TOKEN);
 
@@ -98,5 +137,37 @@ describe('0002 backfill', () => {
     expect(graph?.title).toBe('Site relaunch');
     await mergeGraph(db, graph!.id, { tasks: [{ key: 'prod', title: 'Production cutover' }] });
     expect((await loadGraph(db, graph!.id)).tasks).toHaveLength(4);
+  });
+});
+
+describe('the backfill after a delete', () => {
+  it('does not resurrect a graph the owner deleted', async () => {
+    await ensureSchema(db);
+    const [mine] = await listGraphs(db, TOKEN);
+    expect(await deleteGraph(db, TOKEN, mine.id)).toBe(true);
+
+    // The cold start that used to bring it back: the owner has no handle
+    // again, so the "has this owner got one?" guard alone would re-mint it.
+    await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
+
+    expect(await listGraphs(db, TOKEN)).toEqual([]);
+    expect(await resolveGraph(db, TOKEN)).toBeNull();
+    // The other token is untouched by any of it.
+    expect(await listGraphs(db, OTHER_TOKEN)).toHaveLength(1);
+  });
+
+  it('does not pour a deleted graph into a surviving one', async () => {
+    await ensureSchema(db);
+    const [migrated] = await listGraphs(db, TOKEN);
+    const fresh = await createGraph(db, TOKEN, 'Later plan');
+    await mergeGraph(db, fresh.id, { tasks: [{ key: 'new', title: 'Something else' }] });
+    await deleteGraph(db, TOKEN, migrated.id);
+
+    await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
+
+    // Without the receipt, `tasks`/`edges` would land in the oldest
+    // surviving handle, which is a plan the user never put them in.
+    expect((await loadGraph(db, fresh.id)).tasks.map((t) => t.key)).toEqual(['new']);
+    expect(await listGraphs(db, TOKEN)).toHaveLength(1);
   });
 });

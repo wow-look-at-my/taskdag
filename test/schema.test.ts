@@ -23,17 +23,20 @@ describe('statementsOf', () => {
   it('splits every migration into executable statements', () => {
     expect(SCHEMA_STATEMENTS.length).toBeGreaterThan(0);
     for (const statement of SCHEMA_STATEMENTS) {
-      expect(statement).toMatch(/^(CREATE (TABLE|INDEX)|INSERT INTO)/);
+      expect(statement).toMatch(/^(CREATE (TABLE|INDEX)|INSERT (OR IGNORE )?INTO)/);
       expect(statement).not.toContain(';');
     }
   });
 
   it('every statement is idempotent, because this runs on a live database', () => {
-    // Two shapes are allowed and no others: DDL that no-ops when the object
-    // exists, and a backfill that no-ops when the rows are already there. A
-    // bare INSERT here would duplicate somebody's graph on every cold start.
+    // Three shapes are allowed and no others: DDL that no-ops when the
+    // object exists, a backfill that no-ops when the rows are already
+    // there, and an `INSERT OR IGNORE` whose primary key makes it no-op on
+    // its own. A bare INSERT here would duplicate somebody's graph on every
+    // cold start.
     for (const statement of SCHEMA_STATEMENTS) {
-      if (statement.startsWith('INSERT INTO')) expect(statement).toMatch(/NOT EXISTS \(SELECT/);
+      if (statement.startsWith('INSERT OR IGNORE INTO')) continue;
+      else if (statement.startsWith('INSERT INTO')) expect(statement).toMatch(/NOT EXISTS \(SELECT/);
       else expect(statement).toContain('IF NOT EXISTS');
     }
   });
@@ -52,6 +55,15 @@ describe('statementsOf', () => {
         expect(literal).not.toContain('--');
       }
     }
+  });
+
+  it('never puts a DROP on the request path', () => {
+    // The bootstrap replays this whole set on every cold start, so it can
+    // only ever hold statements that are safe to run again. 0003 drops
+    // 0001's tables and is deliberately absent from MIGRATIONS for exactly
+    // that reason; this fails if someone adds it, or writes another like it.
+    for (const statement of SCHEMA_STATEMENTS) expect(statement).not.toMatch(/^\s*(DROP|ALTER|DELETE|UPDATE)\b/i);
+    expect(MIGRATIONS.map((m) => m.name)).not.toContain('0003_drop_legacy_tables.sql');
   });
 
   it('carries no PRAGMA: remote D1 rejects them and enforces foreign keys itself', () => {

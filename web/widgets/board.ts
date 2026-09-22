@@ -22,6 +22,10 @@ import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 // time — without this line the element never upgrades.
 import '../../third_party/js-snippets/src/ui/dag-view.ts';
 import type { DagEdge, DagNode, DagStyleMap, DagViewElement } from '../../third_party/js-snippets/src/ui/dag-view.ts';
+// The server's own Mermaid renderer, compiled into this bundle. `graph.ts`
+// is pure -- no D1, no MCP -- so the Worker and the App share one
+// implementation instead of drifting apart as two.
+import { toMermaid } from '../../src/graph.ts';
 
 // -- The shape the tools return -------------------------------------------------------
 
@@ -56,6 +60,8 @@ interface GraphData {
   title: string;
   nodes: BoardNode[];
   edges: { from: string; to: string }[];
+  /** EVERY startable key, uncapped. The receipt's `ready` is only the first few. */
+  ready?: string[];
 }
 
 /** What `render` draws: a receipt joined to the graph it points at. */
@@ -128,6 +134,9 @@ const doneBtn = document.getElementById('done') as HTMLButtonElement;
 const refreshBtn = document.getElementById('refresh') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
+/** How many ready keys the header line spells out before it counts them. */
+const READY_HEADER_KEYS = 5;
+
 let board: BoardPayload = {};
 /** The graph every call in this card is about. Comes from the receipt. */
 let handle: string | null = null;
@@ -135,6 +144,12 @@ let selectedKey: string | null = null;
 let busy = false;
 
 const app = new App({ name: 'taskdag-board', version: '0.1.0' });
+
+const copyBtn = document.getElementById('copy') as HTMLButtonElement;
+const copyMenu = document.getElementById('copymenu') as HTMLDivElement;
+
+/** The graph the receipt pointed at, kept for the copy formats. */
+let graphData: GraphData | null = null;
 
 // -- Rendering --------------------------------------------------------------------------
 
@@ -146,8 +161,13 @@ function render(payload: BoardPayload): void {
 
   titleEl.textContent = payload.title ?? payload.graph?.title ?? 'TaskDAG';
 
+  // The highlight set is every ready key; the header is a line of text, so
+  // it names a handful and counts the rest.
   const ready = payload.ready ?? [];
-  readyEl.textContent = ready.length > 0 ? `Ready: ${ready.map((r) => r.key).join(', ')}` : nodes.length > 0 ? 'Nothing ready' : '';
+  const named = ready.slice(0, READY_HEADER_KEYS).map((r) => r.key);
+  const rest = ready.length - named.length;
+  readyEl.textContent =
+    ready.length > 0 ? `Ready: ${named.join(', ')}${rest > 0 ? ` +${rest} more` : ''}` : nodes.length > 0 ? 'Nothing ready' : '';
 
   graphEl.setData({
     nodes: nodes.map((node): DagNode => {
@@ -273,13 +293,23 @@ async function readGraph(id: string): Promise<GraphData> {
  * entry point goes through.
  */
 async function applyReceipt(receipt: Receipt): Promise<void> {
-  handle = receipt.graph;
+  handle = receipt.graph ?? null;
   if (handle === null) {
+    graphData = null;
     render({ title: receipt.title, ready: [], graph: { nodes: [], edges: [] } });
     return;
   }
   const data = await readGraph(handle);
-  render({ title: receipt.title ?? data.title, ready: receipt.ready ?? [], graph: { nodes: data.nodes, edges: data.edges } });
+  graphData = data;
+  // READY COMES FROM THE RESOURCE, NOT THE RECEIPT. The receipt names only
+  // the first few (DEFAULT_READY_LIMIT on the server), and the board colours
+  // a node by whether it is in this set -- so taking the receipt's list
+  // would draw the 6th startable task as an ordinary todo.
+  const byKey = new Map(data.nodes.map((n) => [n.key, n]));
+  const ready = data.ready
+    ? data.ready.filter((key) => byKey.has(key)).map((key) => ({ key, title: byKey.get(key)!.title }))
+    : (receipt.ready ?? []);
+  render({ title: receipt.title ?? data.title, ready, graph: { nodes: data.nodes, edges: data.edges } });
 }
 
 async function loadDetail(key: string): Promise<void> {
@@ -313,6 +343,131 @@ async function refresh(): Promise<void> {
     setBusy(false, err instanceof Error ? err.message : 'Refresh failed.', true);
   }
 }
+
+// -- Copy ---------------------------------------------------------------------------------
+
+/**
+ * The board draws a canvas, and you cannot select text out of a canvas.
+ * These are the three shapes somebody actually wants to paste somewhere:
+ * a checklist for an issue, a diagram for a doc, the raw graph for a script.
+ */
+type CopyFormat = 'markdown' | 'mermaid' | 'json';
+
+const COPY_LABEL: Record<CopyFormat, string> = { markdown: 'Markdown', mermaid: 'Mermaid', json: 'JSON' };
+
+/** A checklist, with each task's prerequisites spelled out under it. */
+function toMarkdown(data: GraphData, ready: { key: string }[]): string {
+  const readyKeys = new Set(ready.map((r) => r.key));
+  const lines = [`# ${data.title}`, ''];
+  const counts = `${data.nodes.length} task${data.nodes.length === 1 ? '' : 's'} · ${data.edges.length} dependenc${data.edges.length === 1 ? 'y' : 'ies'}`;
+  lines.push(readyKeys.size > 0 ? `${counts} · ready: ${[...readyKeys].join(', ')}` : counts, '');
+
+  for (const node of data.nodes) {
+    const box = node.status === 'done' ? '[x]' : '[ ]';
+    const status = node.status === 'todo' || node.status === 'done' ? '' : ` \`${node.status}\``;
+    lines.push(`- ${box} **${node.key}** — ${node.title}${status}`);
+    const waits = data.edges.filter((e) => e.from === node.key).map((e) => e.to);
+    if (waits.length > 0) lines.push(`  - waits on: ${waits.join(', ')}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * The diagram, from the server's own renderer rather than a second copy of
+ * it: `src/graph.ts` is pure, so the Worker and this bundle compile the
+ * same function and cannot drift.
+ */
+function toMermaidText(data: GraphData): string {
+  return toMermaid(
+    data.nodes.map((n) => ({ key: n.key, title: n.title, status: n.status, priority: n.priority, detail: '', tags: n.tags ?? [] })),
+    data.edges,
+  );
+}
+
+/**
+ * Clipboard, with a fallback. `navigator.clipboard` needs a permission the
+ * host's sandbox may not grant, and a copy button that silently does
+ * nothing is worse than one that says it could not.
+ */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Older path, and the one that survives a missing clipboard permission.
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function openCopyMenu(open: boolean): void {
+  copyMenu.hidden = !open;
+  copyBtn.setAttribute('aria-expanded', String(open));
+}
+
+async function copyAs(format: CopyFormat): Promise<void> {
+  openCopyMenu(false);
+  if (!graphData || graphData.nodes.length === 0) {
+    setBusy(false, 'Nothing to copy yet.', true);
+    return;
+  }
+  const text =
+    format === 'json'
+      ? JSON.stringify(graphData, null, 2)
+      : format === 'mermaid'
+        ? toMermaidText(graphData)
+        : toMarkdown(graphData, board.ready ?? []);
+
+  const ok = await copyText(text);
+  setBusy(false, ok ? `Copied ${COPY_LABEL[format]}.` : `Could not reach the clipboard — the host blocked it.`, !ok);
+}
+
+copyBtn.addEventListener('click', (event) => {
+  event.stopPropagation();
+  openCopyMenu(copyMenu.hidden !== false);
+});
+
+copyMenu.addEventListener('click', (event) => {
+  const target = (event.target as HTMLElement).closest('button');
+  const format = target?.dataset.format as CopyFormat | undefined;
+  if (format) void copyAs(format);
+});
+
+document.addEventListener('click', () => openCopyMenu(false));
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') openCopyMenu(false);
+});
+
+// -- Expanding ----------------------------------------------------------------------------
+
+/**
+ * `<dag-view>`'s own fullscreen button fills the iframe, which is only as
+ * big as the host made the card. So when it toggles, ask the host for the
+ * matching display mode: the element handles the canvas, the host handles
+ * the frame around it. A host that offers no fullscreen mode still gets the
+ * in-iframe fill, which is why this never blocks the toggle.
+ */
+graphEl.addEventListener('fullscreenchange', (event) => {
+  const wants = (event as CustomEvent<{ fullscreen: boolean }>).detail?.fullscreen === true;
+  const mode = wants ? 'fullscreen' : 'inline';
+  const available = app.getHostContext()?.availableDisplayModes;
+  if (available !== undefined && !available.includes(mode)) return;
+  void app.requestDisplayMode({ mode }).catch(() => {
+    // The host declined. The canvas is already filling the iframe, so there
+    // is nothing to undo and nothing worth interrupting the user over.
+  });
+});
 
 // -- Theme -------------------------------------------------------------------------------
 

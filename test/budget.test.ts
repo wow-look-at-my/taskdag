@@ -34,7 +34,7 @@ describe('context budget', () => {
     const tools = await client().tools();
     const bytes = JSON.stringify(tools).length;
 
-    expect(tools).toHaveLength(10);
+    expect(tools).toHaveLength(11);
     expect(bytes).toBeLessThan(10_000);
   });
 

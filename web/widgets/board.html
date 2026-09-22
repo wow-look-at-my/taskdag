@@ -108,7 +108,26 @@
       }
       button:hover:not(:disabled) { border-color: var(--accent); }
       button:disabled { opacity: 0.45; cursor: default; }
+      /* Always-on chrome: copying and refreshing must not require having
+         selected a task first, the way Start/Done do. */
+      #tools { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
       #refresh { margin-left: auto; }
+      #copywrap { position: relative; }
+      /* The menu opens UPWARDS. The body is overflow:hidden and the card is
+         sized to its content, so a menu dropping below the last row would be
+         clipped by the iframe instead of overlapping it. */
+      #copymenu {
+        position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 2;
+        display: flex; flex-direction: column; min-width: 148px; padding: 4px;
+        background: var(--chip); border: 1px solid var(--line); border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      }
+      #copymenu[hidden] { display: none; }
+      #copymenu button {
+        border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 5px;
+      }
+      #copymenu button:hover { background: var(--line); }
+      #copymenu .what { color: var(--muted); font-size: 11px; margin-left: 6px; }
       #status { color: var(--muted); font-size: 12px; min-height: 16px; margin-top: 6px; }
       #status.error { color: var(--danger); }
     </style>
@@ -119,13 +138,24 @@
       <div id="ready"></div>
     </header>
 
-    <dag-view id="graph" orientation="LR" no-fullscreen-button no-minimap no-search empty-text="No tasks yet — ask for a plan."></dag-view>
+    <dag-view id="graph" orientation="LR" no-minimap no-search empty-text="No tasks yet — ask for a plan."></dag-view>
 
     <div id="selected"><span class="hint">Click a task to see what it is waiting on.</span></div>
 
     <div id="actions" hidden>
       <button id="start" type="button">Start</button>
       <button id="done" type="button">Done</button>
+    </div>
+
+    <div id="tools">
+      <div id="copywrap">
+        <button id="copy" type="button" aria-haspopup="menu" aria-expanded="false">Copy &#9662;</button>
+        <div id="copymenu" role="menu" hidden>
+          <button type="button" role="menuitem" data-format="markdown">Markdown<span class="what">task list</span></button>
+          <button type="button" role="menuitem" data-format="mermaid">Mermaid<span class="what">diagram</span></button>
+          <button type="button" role="menuitem" data-format="json">JSON<span class="what">raw graph</span></button>
+        </div>
+      </div>
       <button id="refresh" type="button">Refresh</button>
     </div>
     <div id="status"></div>
