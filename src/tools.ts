@@ -61,6 +61,8 @@ export function graphUri(handle: string): string {
 
 /** How many ready tasks a receipt names before it stops. */
 const DEFAULT_READY_LIMIT = 5;
+/** What a read returns when it does not say: the cheapest useful answer. */
+const DEFAULT_INCLUDE = ['summary', 'ready'] as const;
 /** How much of a title gets repeated into a receipt or a diagram label. */
 const LABEL_CHARS = 80;
 /**
@@ -114,7 +116,7 @@ function fail(message: string) {
   return { isError: true, content: [{ type: 'text' as const, text: message }] };
 }
 
-function counts(state: GraphState): Record<string, number> {
+function countsOf(state: GraphState): Record<string, number> {
   const out: Record<string, number> = {};
   for (const task of state.tasks) out[task.status] = (out[task.status] ?? 0) + 1;
   return out;
@@ -144,7 +146,7 @@ function receipt(state: GraphState, extra: Record<string, unknown> = {}, readyLi
     title: state.title,
     tasks: state.tasks.length,
     edges: state.edges.length,
-    counts: counts(state),
+    counts: countsOf(state),
     ready,
     ...extra,
   };
@@ -227,30 +229,24 @@ interface ToolSchema {
 }
 
 interface ReadArgs {
-  what: 'board' | 'ready' | 'task' | 'graphs' | 'mermaid';
   graph?: string;
-  key?: string;
-  limit?: number;
   keys?: string[];
   depth?: number;
   direction?: 'up' | 'down' | 'both';
   status?: TaskStatus[];
+  include?: ('summary' | 'ready' | 'tasks' | 'edges' | 'detail' | 'mermaid' | 'graphs')[];
+  limit?: number;
   max_chars?: number;
   override_token?: string;
 }
 
 interface WriteArgs {
-  op: 'plan' | 'update' | 'unlink';
   graph?: string;
   new_graph?: boolean;
   title?: string;
   tasks?: TaskInput[];
   edges?: Edge[];
-  key?: string;
-  status?: TaskStatus;
-  detail?: string;
-  priority?: number;
-  tags?: string[];
+  unlink?: Edge[];
 }
 
 // -- Registration ---------------------------------------------------------------------
@@ -317,38 +313,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
       annotations: readTool.annotations,
       _meta: { ui: { resourceUri: BOARD_URI, prefersBorder: true, visibility: ['model', 'app'] } },
     },
-    async (args) =>
-      guard(async () => {
-        const { what, graph } = args;
-
-        if (what === 'graphs') {
-          // The listing, plus the current graph drawn: a card with nothing
-          // in it would be a worse answer than a card with your latest plan.
-          const graphs = await listGraphs(ctx.db, ctx.owner);
-          return receipt(await read(), { graphs });
-        }
-
-        if (what === 'task') {
-          if (!args.key) return fail('read(what="task") needs `key`: which task?');
-          const target = await existing(graph);
-          const task = await getTask(ctx.db, target.id, args.key);
-          if (!task) return fail(`No task with key "${args.key}".`);
-          const state = await loadGraph(ctx.db, target.id);
-          return json({
-            graph: target.id,
-            task,
-            depends_on: dependenciesOf(args.key, state.edges).sort(compareKeys),
-            dependents: dependentsOf(args.key, state.edges).sort(compareKeys),
-            blocked_by: blockedBy(args.key, state.tasks, state.edges).sort(compareKeys),
-            ready: readyKeys(state.tasks, state.edges).includes(args.key),
-          });
-        }
-
-        if (what === 'mermaid') return drawMermaid(ctx, args);
-
-        // board and ready differ only in how much of the queue they name.
-        return receipt(await read(graph), {}, what === 'ready' ? (args.limit ?? DEFAULT_READY_LIMIT) : DEFAULT_READY_LIMIT);
-      }),
+    async (args) => guard(async () => readGraph(ctx, args)),
   );
 
   // -- write --------------------------------------------------------------------------
@@ -363,41 +328,30 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
       annotations: writeTool.annotations,
       _meta: { ui: { resourceUri: BOARD_URI, prefersBorder: true, visibility: ['model', 'app'] } },
     },
-    async (args) =>
+    async ({ graph, new_graph, title, tasks, edges, unlink }) =>
       guard(async () => {
-        const { op, graph } = args;
-
-        if (op === 'update') {
-          if (!args.key) return fail('write(op="update") needs `key`: which task?');
-          const target = await existing(graph);
-          const task = await patchTask(ctx.db, target.id, args.key, {
-            // In this branch `title` is the TASK's: the plan branch is a
-            // separate object in the schema, so the name is no longer shared
-            // between "rename the graph" and "rename the task".
-            ...(args.title !== undefined ? { title: args.title } : {}),
-            ...(args.status !== undefined ? { status: args.status } : {}),
-            ...(args.detail !== undefined ? { detail: args.detail } : {}),
-            ...(args.priority !== undefined ? { priority: args.priority } : {}),
-            ...(args.tags !== undefined ? { tags: args.tags } : {}),
-          });
-          return receipt(await loadGraph(ctx.db, target.id), { updated: { key: task.key, status: task.status } });
+        if (!tasks?.length && !edges?.length && !unlink?.length && title === undefined) {
+          return fail('Nothing to write: send `tasks`, `edges`, `unlink` or `title`.');
         }
 
-        if (op === 'unlink') {
-          if (!args.edges || args.edges.length === 0) return fail('write(op="unlink") needs `edges`: which dependencies to remove?');
-          const target = await existing(graph);
-          const removed = await unlinkEdges(ctx.db, target.id, args.edges);
-          return receipt(await loadGraph(ctx.db, target.id), { unlinked: removed });
-        }
-
-        // plan
-        if (!args.tasks?.length && !args.edges?.length && args.title === undefined) {
-          return fail('write(op="plan") needs `tasks`, `edges` or `title` — otherwise there is nothing to write.');
-        }
         const target =
-          args.new_graph && graph === undefined ? await createGraph(ctx.db, ctx.owner, args.title) : await write(graph, args.title);
-        const merged = await mergeGraph(ctx.db, target.id, { title: args.title, tasks: args.tasks, edges: args.edges });
-        return receipt(await loadGraph(ctx.db, target.id), { created: merged.created_keys, updated: merged.updated_keys });
+          new_graph && graph === undefined
+            ? await createGraph(ctx.db, ctx.owner, title)
+            : (await resolveGraph(ctx.db, ctx.owner, graph, { create: true, title }))!;
+
+        // One call can add and remove in the same breath, which the old
+        // op-per-call shape could not: "these three now depend on that, and
+        // that one no longer does" was two round trips and two receipts.
+        const merged = tasks?.length || edges?.length || title !== undefined
+          ? await mergeGraph(ctx.db, target.id, { title, tasks, edges })
+          : undefined;
+        const unlinked = unlink?.length ? await unlinkEdges(ctx.db, target.id, unlink) : undefined;
+
+        return receipt(await loadGraph(ctx.db, target.id), {
+          ...(merged ? { created: merged.created_keys, updated: merged.updated_keys } : {}),
+          ...(merged?.linked ? { linked: merged.linked } : {}),
+          ...(unlinked !== undefined ? { unlinked } : {}),
+        });
       }),
   );
 
@@ -416,63 +370,129 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
     async ({ graph, confirm }) =>
       guard(async () => {
         if (confirm !== 'RESET') return fail('reset requires { "confirm": "RESET" } exactly. Nothing was changed.');
-        const target = await existing(graph);
+        const target = await resolveGraph(ctx.db, ctx.owner, graph);
+        if (!target) return fail(`No graph with handle "${graph}".`);
         const deleted = await resetGraph(ctx.db, target.id);
         return json({ graph: target.id, reset: true, ...deleted });
       }),
   );
 }
 
-/** The `read(what="mermaid")` branch, lifted out to keep the switch readable. */
-async function drawMermaid(ctx: ToolContext, args: ReadArgs) {
+/**
+ * One read, selected then projected.
+ *
+ * SELECT, THEN SAY WHAT YOU WANT BACK. `keys`/`depth`/`direction`/`status`
+ * pick a part of the graph; `include` says what to return about that part.
+ * The two are independent, which is the point: "the ready queue AND a
+ * diagram of what is blocking T7" is one call, where a tool per question
+ * needed two and returned the summary twice.
+ *
+ * The default — no `include` — is the summary and the ready queue, because
+ * that is what a board render needs and it is the cheapest useful answer.
+ */
+async function readGraph(ctx: ToolContext, args: ReadArgs) {
+  const include = new Set(args.include?.length ? args.include : DEFAULT_INCLUDE);
   const target = await resolveGraph(ctx.db, ctx.owner, args.graph);
-  if (!target) return fail('There is no graph yet. Call write(op="plan") first.');
-  const state = await loadGraph(ctx.db, target.id);
-  if (state.tasks.length === 0) return json({ graph: target.id, title: state.title, tasks: 0, mermaid: null });
+  const state = await loadGraph(ctx.db, target?.id ?? null);
 
   const selection: Selection = { keys: args.keys, depth: args.depth, direction: args.direction, status: args.status };
-  const selected = selectSubgraph(state.tasks, state.edges, selection);
-  if (selected.tasks.length === 0) {
+  const narrowed = isNarrowed(selection);
+  const selected = narrowed ? selectSubgraph(state.tasks, state.edges, selection) : { tasks: state.tasks, edges: state.edges };
+  if (narrowed && selected.tasks.length === 0) {
     return fail(`Nothing selected. ${args.keys?.length ? `No task matched ${args.keys.join(', ')}.` : 'No task matched that status filter.'}`);
   }
 
-  const text = toMermaid(selected.tasks, selected.edges);
-  const unlocked = args.override_token !== undefined && (await consumeOverflow(ctx.db, target.id, args.override_token));
-  if (args.override_token !== undefined && !unlocked) {
-    return fail('That override_token is not valid for this graph, or has already been used. Ask for the diagram again to get a fresh one.');
+  const body: Record<string, unknown> = { graph: state.id };
+
+  if (include.has('summary')) {
+    body.title = state.title;
+    body.tasks = state.tasks.length;
+    body.edges = state.edges.length;
+    body.counts = countsOf(state);
+    if (narrowed) body.selected = selected.tasks.length;
   }
-  // The budget as asked for. The default is there so a 200-node graph
-  // cannot land whole by accident; a caller naming a number is not an
-  // accident, so it is taken at face value. The token stays because it
-  // answers "give me all of it" without having to know the size first.
+
+  if (include.has('ready')) {
+    const ready = readyList(state, args.limit ?? DEFAULT_READY_LIMIT);
+    body.ready = ready;
+    const total = readyKeys(state.tasks, state.edges).length;
+    if (total > ready.length) body.ready_more = total - ready.length;
+  }
+
+  if (include.has('tasks')) {
+    const wanted = include.has('detail');
+    const blocked = new Map(selected.tasks.map((task) => [task.key, blockedBy(task.key, state.tasks, state.edges)]));
+    body.task_list = selected.tasks.map((task) => ({
+      key: task.key,
+      title: wanted ? task.title : shorten(task.title),
+      status: task.status,
+      ...(task.priority !== 0 ? { priority: task.priority } : {}),
+      ...(task.tags.length > 0 ? { tags: task.tags } : {}),
+      ...(wanted && task.detail ? { detail: task.detail } : {}),
+      ...(blocked.get(task.key)?.length ? { blocked_by: blocked.get(task.key) } : {}),
+    }));
+  }
+
+  if (include.has('edges')) body.edge_list = selected.edges;
+
+  if (include.has('graphs')) body.graphs = await listGraphs(ctx.db, ctx.owner);
+
+  if (include.has('mermaid')) {
+    const drawn = await drawMermaid(ctx, target?.id ?? null, selected, narrowed, args);
+    if (typeof drawn.error === 'string') return fail(drawn.error);
+    Object.assign(body, drawn);
+  }
+
+  return json(
+    body,
+    state.id === null
+      ? []
+      : [
+          {
+            uri: graphUri(state.id),
+            name: state.title,
+            description: 'Every task and edge in this graph, as JSON.',
+          },
+        ],
+  );
+}
+
+/**
+ * The diagram, for whatever the read already selected.
+ *
+ * Returns either the fields to merge into the answer, or an `error` for the
+ * caller to surface — it has no business deciding how a read reports one.
+ */
+async function drawMermaid(
+  ctx: ToolContext,
+  graph: string | null,
+  selected: { tasks: Task[]; edges: Edge[] },
+  narrowed: boolean,
+  args: ReadArgs,
+): Promise<Record<string, unknown> & { error?: string }> {
+  if (graph === null || selected.tasks.length === 0) return { mermaid: null };
+
+  const text = toMermaid(selected.tasks, selected.edges);
+  const unlocked = args.override_token !== undefined && (await consumeOverflow(ctx.db, graph, args.override_token));
+  if (args.override_token !== undefined && !unlocked) {
+    return { error: 'That override_token is not valid for this graph, or has already been used. Ask again for a fresh one.' };
+  }
   const limit = unlocked ? Number.POSITIVE_INFINITY : (args.max_chars ?? DEFAULT_MERMAID_CHARS);
 
   if (text.length > limit) {
     // No half-diagram: truncated Mermaid is a syntax error, not a smaller
     // picture. Hand back the measurements and the two ways forward.
-    const token = await recordOverflow(ctx.db, target.id, text.length);
-    return json({
-      graph: target.id,
-      overflow: true,
-      chars: text.length,
-      limit,
-      nodes: selected.tasks.length,
-      edges: selected.edges.length,
-      override_token: token,
-      hint: isNarrowed(selection)
-        ? 'Narrow further (fewer keys, lower depth, one direction), or resend with override_token to get it whole.'
-        : 'Select a part of it with keys + depth, or filter by status. Resend with override_token to get the whole thing anyway.',
-    });
+    const token = await recordOverflow(ctx.db, graph, text.length);
+    return {
+      mermaid: null,
+      overflow: { chars: text.length, limit, override_token: token },
+      hint: narrowed
+        ? 'Narrow further, or resend with override_token to get it whole.'
+        : 'Select with keys + depth or status, or resend with override_token.',
+    };
   }
 
-  return json({
-    graph: target.id,
-    title: state.title,
-    nodes: selected.tasks.length,
-    edges: selected.edges.length,
-    ...(selected.tasks.length < state.tasks.length ? { of_nodes: state.tasks.length } : {}),
-    mermaid: text,
-  });
+  return { mermaid: text };
 }
 
 // -- Resources ------------------------------------------------------------------------

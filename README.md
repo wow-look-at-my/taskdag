@@ -205,56 +205,36 @@ An edge `{ from, to }` reads **"`from` depends on `to`"**: `to` must be done bef
 start. Mermaid output and the board both draw it the other way round — prerequisite first — because
 that is the direction work flows.
 
-Each tool is a `oneOf` of branch objects, so a branch carries exactly its own fields and its own
-`required` — `what="task"` requires `key` in the schema, and `limit` does not exist outside
-`what="ready"`. Descriptions are one sentence, always: they are paid for in every conversation, and
-branch objects mean no prose is needed to explain when a field applies.
+`read` selects, then projects. `keys`/`depth`/`direction`/`status` pick a part of the graph;
+`include` says what to return about that part. The two are independent, which is the point — *"the
+ready queue **and** a diagram of what is blocking `staging`"* is one call:
 
-| Tool | Branch | What it does | Destructive |
-|---|---|---|---|
-| `read` | `what="board"` | Counts, ready queue, and draws the card. | no |
-| | `what="ready"` | Tasks that can start now: `todo` with every dependency `done`. | no |
-| | `what="task"` | One task whole — detail, dependencies, dependents, what blocks it. | no |
-| | `what="graphs"` | Every **non-empty** graph here: handle, title, task count. | no |
-| | `what="mermaid"` | The graph as a diagram — selectable and capped, see below. | no |
-| `write` | `op="plan"` | Create/update tasks **and** edges. **Merges — never deletes.** `new_graph` starts a separate plan. | no |
-| | `op="update"` | Change one task's status, title, detail, priority or tags. | no |
-| | `op="unlink"` | Remove dependency edges. The tasks stay. | edges only |
-| `reset` | | **Empties a graph**, which is also how one is deleted. Needs `{ "confirm": "RESET" }` and an explicit handle. | **yes** |
+```json
+{ "keys": ["staging"], "depth": 1, "include": ["summary", "ready", "mermaid"] }
+```
 
-**Three tools, not ten.** Ten names cost about ten bytes each and carried a lot of meaning, so
-collapsing them is worth less than the count suggests — measured, 7.3kB against 9.2kB. What it buys
-is one door in, one door out, and no two tools that do the same thing, which is the bug both
-`add_tasks` and `link` were.
+| `include` | Adds |
+|---|---|
+| `summary` *(default)* | Handle, title, task and edge counts, status counts, and `selected` when narrowed |
+| `ready` *(default)* | The startable tasks, `limit` of them |
+| `tasks` | The selected tasks: key, title, status, priority, tags, and what blocks each |
+| `detail` | Full titles and `detail` text on those tasks, instead of shortened ones |
+| `edges` | The selected edges |
+| `mermaid` | A diagram of the selection, subject to the budget below |
+| `graphs` | Every non-empty graph on this connector |
 
-**`reset` is not a branch of `write`.** Hosts grant permission per tool *name*, and
-`destructiveHint` is per tool too. One writer would make "you may tick tasks off" and "you may wipe
-the graph" the same grant, and would have to be marked either always destructive (every edit
-prompts) or never (a wipe does not). It is also the one call with **no default handle**: a default
-that empties the wrong graph is not recoverable.
+`write` is the same idea: one object, everything optional, composable. `tasks` upserts by key,
+`edges` adds dependencies, `unlink` removes them — and a single call can do all three, which an
+op-per-call shape could not. Only `key` is required on a task, so changing a status is
+`{"tasks":[{"key":"staging","status":"done"}]}`; a title is required only when the key is new.
 
-**There is no `delete_graph`.** An emptied graph drops out of `read(what="graphs")` — a list
-filling up with the husks of resets is a list nobody can read — so emptying already *is* deleting.
-The handle keeps working, and writing to it puts the graph back. Resolution is deliberately not
-filtered the same way: clear a graph and add to it without naming one, and you land back in the one
-you just cleared rather than silently in an older one.
+`reset` stays its own tool: hosts grant permission per tool *name* and `destructiveHint` is per
+tool, so folding it in would make "you may tick tasks off" and "you may wipe the graph" one grant.
 
-**The schemas are JSON, not zod.** `src/schemas/read.json`, `write.json` and `reset.json` are
-registered through `fromJsonSchema`, so what a client sees is those files. `common.json` holds the
-things more than one of them needs — the handle's `^g_[0-9a-f]{16}$` pattern, the status enum, the
-shape of an edge — referenced with `$ref` and **inlined at registration**: a `$ref` is no use to a
-client that has no `common.json` and no way to fetch one, so the sharing is a source-level
-convenience and the emitted document stays self-contained. A test asserts no `$ref` survives.
-
-It deliberately carries **no `allOf`/`if`/`then`**. Saying "`key` is required when `what="task"`"
-that way cost 566 bytes of every conversation to restate something the discriminator's description
-already says and the handler says better — a schema rejection names a constraint, while the handler
-answers *`read(what="task")` needs `key`: which task?*. One of the two conditionals was worse than
-redundant: it forbade passing `graph` alongside `what="graphs"`, turning a harmless ignored
-argument into a hard failure.
-
-Resources: `taskdag://graph/<handle>` (every node and edge — the payload the tools leave out),
-`taskdag://me` (identity, never the token) and `ui://taskdag/board` (the MCP App).
+**Descriptions are one sentence, always** — they are paid for in every conversation. The whole
+surface is **4,501 bytes**, against 6,801 for a version with a branch object per question and 9,181
+for the ten tools this started as. Tests hold both lines: nothing over 5,000 bytes, no description
+with a second sentence.
 
 ### What a result costs
 

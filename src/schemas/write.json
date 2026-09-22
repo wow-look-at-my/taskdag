@@ -1,7 +1,7 @@
 {
   "name": "write",
   "title": "Change a graph",
-  "description": "Change a task graph; nothing here deletes.",
+  "description": "Add or change tasks and dependencies; merges, never deletes.",
   "annotations": {
     "readOnlyHint": false,
     "destructiveHint": false,
@@ -11,132 +11,63 @@
   "inputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "oneOf": [
-      {
-        "type": "object",
-        "description": "Adds or updates tasks and edges \u2014 merges, never deletes.",
-        "additionalProperties": false,
-        "required": [
-          "op"
-        ],
-        "properties": {
-          "op": {
-            "const": "plan"
-          },
-          "graph": {
-            "$ref": "common.json#/graph_id"
-          },
-          "new_graph": {
-            "type": "boolean",
-            "description": "Start a separate graph instead of merging."
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Names the graph."
-          },
-          "tasks": {
-            "type": "array",
-            "maxItems": 200,
-            "description": "Tasks to create or update, matched by key.",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "key",
-                "title"
-              ],
-              "properties": {
-                "key": {
-                  "$ref": "common.json#/task_key"
-                },
-                "title": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Short imperative title."
-                },
-                "detail": {
-                  "$ref": "common.json#/detail"
-                },
-                "status": {
-                  "$ref": "common.json#/status",
-                  "description": "Omitted leaves an existing status alone."
-                },
-                "priority": {
-                  "$ref": "common.json#/priority"
-                },
-                "tags": {
-                  "$ref": "common.json#/tags"
-                }
-              }
+    "additionalProperties": false,
+    "properties": {
+      "graph": {
+        "$ref": "common.json#/graph_id"
+      },
+      "new_graph": {
+        "type": "boolean",
+        "description": "Start a separate graph instead of merging."
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Names the graph."
+      },
+      "tasks": {
+        "type": "array",
+        "maxItems": 200,
+        "description": "Tasks to create or update, matched by key.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key"
+          ],
+          "properties": {
+            "key": {
+              "$ref": "common.json#/task_key"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Short imperative title; required for a new task."
+            },
+            "detail": {
+              "$ref": "common.json#/detail"
+            },
+            "status": {
+              "$ref": "common.json#/status",
+              "description": "Omitted leaves an existing status alone."
+            },
+            "priority": {
+              "$ref": "common.json#/priority"
+            },
+            "tags": {
+              "$ref": "common.json#/tags"
             }
-          },
-          "edges": {
-            "$ref": "common.json#/edges"
           }
         }
       },
-      {
-        "type": "object",
-        "description": "Changes one task; omitted fields are untouched.",
-        "additionalProperties": false,
-        "required": [
-          "op",
-          "key"
-        ],
-        "properties": {
-          "op": {
-            "const": "update"
-          },
-          "graph": {
-            "$ref": "common.json#/graph_id"
-          },
-          "key": {
-            "$ref": "common.json#/task_key",
-            "description": "Which task."
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Renames the task."
-          },
-          "status": {
-            "$ref": "common.json#/status",
-            "description": "Start, finish, reopen or cancel it."
-          },
-          "detail": {
-            "$ref": "common.json#/detail",
-            "description": "Replaces the task detail."
-          },
-          "priority": {
-            "$ref": "common.json#/priority"
-          },
-          "tags": {
-            "$ref": "common.json#/tags",
-            "description": "Replaces the task tags."
-          }
-        }
+      "edges": {
+        "$ref": "common.json#/edges",
+        "description": "Dependencies to add."
       },
-      {
-        "type": "object",
-        "description": "Removes dependency edges, keeping the tasks.",
-        "additionalProperties": false,
-        "required": [
-          "op",
-          "edges"
-        ],
-        "properties": {
-          "op": {
-            "const": "unlink"
-          },
-          "graph": {
-            "$ref": "common.json#/graph_id"
-          },
-          "edges": {
-            "$ref": "common.json#/edges"
-          }
-        }
+      "unlink": {
+        "$ref": "common.json#/edges",
+        "description": "Dependencies to remove; the tasks stay."
       }
-    ]
+    }
   }
 }

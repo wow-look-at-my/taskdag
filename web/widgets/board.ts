@@ -71,12 +71,19 @@ interface BoardPayload {
   graph?: { title?: string; nodes: BoardNode[]; edges: { from: string; to: string }[] };
 }
 
-interface TaskDetail {
-  task: { key: string; title: string; detail: string; status: TaskStatus; priority: number; tags: string[] };
-  depends_on: string[];
-  dependents: string[];
-  blocked_by: string[];
-  ready: boolean;
+/**
+ * One row of `read(include:["tasks","detail"])`.
+ *
+ * Dependencies are NOT in here. The card already holds every edge, so
+ * asking the server for what it can work out from `graphData` would be a
+ * round trip to be told something it already knew.
+ */
+interface TaskRow {
+  key: string;
+  title: string;
+  status: TaskStatus;
+  detail?: string;
+  blocked_by?: string[];
 }
 
 // -- Status presentation ---------------------------------------------------------------
@@ -209,25 +216,27 @@ function render(payload: BoardPayload): void {
   else renderSelected();
 }
 
-function renderSelected(detail?: TaskDetail): void {
+function renderSelected(detail?: TaskRow): void {
   if (!selectedKey) {
     selectedEl.innerHTML = '<span class="hint">Click a task to see what it is waiting on.</span>';
     actionsEl.hidden = true;
     return;
   }
   const node = board.graph?.nodes.find((n) => n.key === selectedKey);
-  const status = detail?.task.status ?? node?.status ?? 'todo';
-  const title = detail?.task.title ?? node?.title ?? selectedKey;
+  const status = detail?.status ?? node?.status ?? 'todo';
+  const title = detail?.title ?? node?.title ?? selectedKey;
+  const edges = graphData?.edges ?? [];
+  const dependsOn = edges.filter((e) => e.from === selectedKey).map((e) => e.to);
+  const dependents = edges.filter((e) => e.to === selectedKey).map((e) => e.from);
 
   const parts: string[] = [
     `<div class="sel-head"><span class="key">${escapeHtml(selectedKey)}</span> ${escapeHtml(title)} <span class="pill ${status}">${STATUS_LABEL[status]}</span></div>`,
   ];
-  if (detail?.task.detail) parts.push(`<div class="detail">${escapeHtml(detail.task.detail)}</div>`);
-  if (detail) {
-    if (detail.blocked_by.length > 0) parts.push(`<div class="deps">Waiting on ${escapeHtml(detail.blocked_by.join(', '))}</div>`);
-    else if (detail.depends_on.length > 0) parts.push(`<div class="deps">Depends on ${escapeHtml(detail.depends_on.join(', '))}</div>`);
-    if (detail.dependents.length > 0) parts.push(`<div class="deps">Blocks ${escapeHtml(detail.dependents.join(', '))}</div>`);
-  }
+  if (detail?.detail) parts.push(`<div class="detail">${escapeHtml(detail.detail)}</div>`);
+  const blocked = detail?.blocked_by ?? [];
+  if (blocked.length > 0) parts.push(`<div class="deps">Waiting on ${escapeHtml(blocked.join(', '))}</div>`);
+  else if (dependsOn.length > 0) parts.push(`<div class="deps">Depends on ${escapeHtml(dependsOn.join(', '))}</div>`);
+  if (dependents.length > 0) parts.push(`<div class="deps">Blocks ${escapeHtml(dependents.join(', '))}</div>`);
   selectedEl.innerHTML = parts.join('');
 
   actionsEl.hidden = false;
@@ -333,8 +342,9 @@ async function applyReceipt(receipt: Receipt): Promise<void> {
 
 async function loadDetail(key: string): Promise<void> {
   try {
-    const detail = await callTool<TaskDetail>('read', { what: 'task', key });
-    if (detail && selectedKey === key) renderSelected(detail);
+    const detail = await callTool<{ task_list: TaskRow[] }>('read', { keys: [key], depth: 0, include: ['tasks', 'detail'] });
+    const task = detail?.task_list?.[0];
+    if (task && selectedKey === key) renderSelected(task);
   } catch {
     // A detail panel that cannot load is a thinner panel, not a broken board.
   }
@@ -343,7 +353,7 @@ async function loadDetail(key: string): Promise<void> {
 async function update(key: string, status: string): Promise<void> {
   setBusy(true, `Setting ${key} to ${status.replace('_', ' ')}…`);
   try {
-    const receipt = await callTool<Receipt>('write', { op: 'update', key, status });
+    const receipt = await callTool<Receipt>('write', { tasks: [{ key, status }] });
     if (receipt) await applyReceipt(receipt);
     setBusy(false, '');
     if (selectedKey) void loadDetail(selectedKey);
@@ -355,7 +365,7 @@ async function update(key: string, status: string): Promise<void> {
 async function refresh(): Promise<void> {
   setBusy(true, 'Refreshing…');
   try {
-    const receipt = await callTool<Receipt>('read', { what: 'board' });
+    const receipt = await callTool<Receipt>('read', {});
     if (receipt) await applyReceipt(receipt);
     setBusy(false, '');
   } catch (err) {

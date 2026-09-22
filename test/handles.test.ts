@@ -43,7 +43,7 @@ const SITE = {
 describe('a handle addresses the state', () => {
   it('mints one on the first write and hands it back', async () => {
     const mcp = client();
-    const receipt = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    const receipt = await mcp.json<Receipt>('write', { ...SITE });
 
     expect(receipt.graph).toMatch(/^g_[0-9a-f]{16}$/);
     expect(receipt.tasks).toBe(4);
@@ -52,10 +52,10 @@ describe('a handle addresses the state', () => {
 
   it('reaches the same graph from a later call that shares nothing but the handle', async () => {
     const mcp = client();
-    const first = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    const first = await mcp.json<Receipt>('write', { ...SITE });
 
     // No session, no connection reuse, no ordering: just the handle.
-    const later = await mcp.json<Receipt>('read', { what: 'board',  graph: first.graph });
+    const later = await mcp.json<Receipt>('read', {  graph: first.graph });
 
     expect(later.graph).toBe(first.graph);
     expect(later.tasks).toBe(4);
@@ -63,32 +63,32 @@ describe('a handle addresses the state', () => {
 
   it('keeps several graphs on one connector, and lists them newest first', async () => {
     const mcp = client();
-    const site = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
-    const trip = await mcp.json<Receipt>('write', { op: 'plan',  new_graph: true, title: 'Weekend trip', tasks: [{ key: 'train', title: 'Book train' }] });
+    const site = await mcp.json<Receipt>('write', { ...SITE });
+    const trip = await mcp.json<Receipt>('write', {  new_graph: true, title: 'Weekend trip', tasks: [{ key: 'train', title: 'Book train' }] });
 
     expect(trip.graph).not.toBe(site.graph);
 
-    const { graphs } = await mcp.json<{ graphs: { id: string; title: string; tasks: number }[] }>('read', { what: 'graphs' });
+    const { graphs } = await mcp.json<{ graphs: { id: string; title: string; tasks: number }[] }>('read', { include: ['graphs'] });
     expect(graphs.map((g) => g.title)).toEqual(['Weekend trip', 'Site relaunch']);
     expect(graphs.map((g) => g.tasks)).toEqual([1, 4]);
   });
 
   it('defaults to the most recent graph when no handle is passed', async () => {
     const mcp = client();
-    await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
-    const trip = await mcp.json<Receipt>('write', { op: 'plan',  new_graph: true, title: 'Weekend trip', tasks: [{ key: 'train', title: 'Book train' }] });
+    await mcp.json<Receipt>('write', { ...SITE });
+    const trip = await mcp.json<Receipt>('write', {  new_graph: true, title: 'Weekend trip', tasks: [{ key: 'train', title: 'Book train' }] });
 
-    const implicit = await mcp.json<Receipt>('read', { what: 'board' });
+    const implicit = await mcp.json<Receipt>('read', {});
 
     expect(implicit.graph).toBe(trip.graph);
   });
 
   it('will not let one token address another token\'s handle', async () => {
     const mcp = client();
-    const mine = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    const mine = await mcp.json<Receipt>('write', { ...SITE });
 
     const theirs = mcp.as(OTHER_TOKEN);
-    const stolen = await theirs.tool('read', { what: 'board',  graph: mine.graph });
+    const stolen = await theirs.tool('read', {  graph: mine.graph });
 
     // Indistinguishable from a handle that was never minted: a result that
     // said "exists, but not yours" would make handles probe-able.
@@ -98,9 +98,9 @@ describe('a handle addresses the state', () => {
 
   it('rejects a handle that is not shaped like one, without a lookup', async () => {
     const mcp = client();
-    await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    await mcp.json<Receipt>('write', { ...SITE });
 
-    const bogus = await mcp.tool('read', { what: 'board',  graph: '../../etc/passwd' });
+    const bogus = await mcp.tool('read', {  graph: '../../etc/passwd' });
 
     expect(bogus.isError).toBe(true);
     // The schema carries `pattern: ^g_[0-9a-f]{16}$`, so this is refused
@@ -110,55 +110,54 @@ describe('a handle addresses the state', () => {
 
   it('survives a reset: the graph empties, the handle does not move', async () => {
     const mcp = client();
-    const planned = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    const planned = await mcp.json<Receipt>('write', { ...SITE });
 
     await mcp.json('reset', { graph: planned.graph, confirm: 'RESET' });
-    const after = await mcp.json<Receipt>('read', { what: 'board',  graph: planned.graph });
+    const after = await mcp.json<Receipt>('read', {  graph: planned.graph });
 
     expect(after.graph).toBe(planned.graph);
     expect(after.tasks).toBe(0);
   });
 });
 
-describe('the branches say what they need', () => {
-  // Each branch is its own object in a `oneOf`, so "task needs a key" is a
-  // real `required` on that branch rather than prose. The schema catches
-  // these before the handler sees them; the handler still checks, for hosts
-  // that do not validate.
-  it('asks for a key when reading one task', async () => {
-    const refused = await client().tool('read', { what: 'task' });
+describe('one shape, and it says what it needs', () => {
+  it('refuses a write that would change nothing', async () => {
+    const refused = await client().tool('write', {});
+
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toContain('Nothing to write');
+  });
+
+  it('refuses a task with no key', async () => {
+    // `key` is what a task is matched by, so it is the one required field
+    // on a task; everything else is optional because a write is an upsert.
+    const refused = await client().tool('write', { tasks: [{ status: 'done' }] });
 
     expect(refused.isError).toBe(true);
     expect(textOf(refused).toLowerCase()).toContain('key');
   });
 
-  it('asks for a key when updating one task', async () => {
-    const refused = await client().tool('write', { op: 'update', status: 'done' });
-
-    expect(refused.isError).toBe(true);
-    expect(textOf(refused).toLowerCase()).toContain('key');
-  });
-
-  it('asks for edges when unlinking', async () => {
-    const refused = await client().tool('write', { op: 'unlink' });
-
-    expect(refused.isError).toBe(true);
-    expect(textOf(refused).toLowerCase()).toContain('edges');
-  });
-
-  it('refuses a field that belongs to another branch', async () => {
-    // `limit` is the ready branch's. Under the old flat schema every field
-    // was optional on every branch, so this was silently ignored.
-    const refused = await client().tool('read', { what: 'board', limit: 5 });
+  it('refuses a field that is not in the shape', async () => {
+    const refused = await client().tool('read', { what: 'board' });
 
     expect(refused.isError).toBe(true);
   });
 
-  it('refuses a plan that would write nothing', async () => {
-    const refused = await client().tool('write', { op: 'plan' });
+  it('answers two questions in one call', async () => {
+    // The point of selecting and projecting separately: a tool per question
+    // needed two calls for this and returned the summary twice.
+    const mcp = client();
+    await mcp.json<Receipt>('write', { ...SITE });
 
-    expect(refused.isError).toBe(true);
-    expect(textOf(refused)).toContain('nothing to write');
+    const both = await mcp.json<Receipt & { mermaid: string; ready: unknown[] }>('read', {
+      keys: ['staging'],
+      depth: 1,
+      include: ['summary', 'ready', 'mermaid'],
+    });
+
+    expect(both.ready).toHaveLength(2);
+    expect(both.mermaid).toContain('staging');
+    expect(both.tasks).toBe(4);
   });
 });
 
@@ -166,7 +165,7 @@ describe('a key has to name something', () => {
   it('refuses to create a task keyed like a slot number', async () => {
     const mcp = client();
 
-    const refused = await mcp.tool('write', { op: 'plan',  title: 'Release', tasks: [{ key: 'T3', title: 'Write the tests' }] });
+    const refused = await mcp.tool('write', {  title: 'Release', tasks: [{ key: 'T3', title: 'Write the tests' }] });
 
     expect(refused.isError).toBe(true);
     expect(textOf(refused)).toContain('names nothing');
@@ -179,16 +178,16 @@ describe('a key has to name something', () => {
 
     // The schema rejects this one before any handler sees it: `key` used to
     // be optional and auto-assigned, which is how T3 got minted.
-    const refused = await mcp.tool('write', { op: 'plan',  title: 'Release', tasks: [{ title: 'Write the tests' }] });
+    const refused = await mcp.tool('write', {  title: 'Release', tasks: [{ title: 'Write the tests' }] });
 
     expect(refused.isError).toBe(true);
   });
 
   it('writes nothing at all when one task in the batch is refused', async () => {
     const mcp = client();
-    const planned = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    const planned = await mcp.json<Receipt>('write', { ...SITE });
 
-    const refused = await mcp.tool('write', { op: 'plan', 
+    const refused = await mcp.tool('write', { 
       graph: planned.graph,
       tasks: [
         { key: 'launch-checklist', title: 'Launch checklist' },
@@ -198,13 +197,13 @@ describe('a key has to name something', () => {
 
     expect(refused.isError).toBe(true);
     // The good task in the same call must not have landed.
-    expect((await mcp.json<Receipt>('read', { what: 'board',  graph: planned.graph })).tasks).toBe(4);
+    expect((await mcp.json<Receipt>('read', {  graph: planned.graph })).tasks).toBe(4);
   });
 
   it('takes any key that carries meaning', async () => {
     const mcp = client();
 
-    const made = await mcp.json<Receipt>('write', { op: 'plan', 
+    const made = await mcp.json<Receipt>('write', { 
       title: 'Release',
       tasks: [
         { key: 'write-tests', title: 'Write the tests' },
@@ -220,28 +219,28 @@ describe('a key has to name something', () => {
 describe('an empty graph is a deleted graph, for listing purposes', () => {
   it('drops out of the list when it is emptied, and comes back when it is not', async () => {
     const mcp = client();
-    const kept = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
-    const scratch = await mcp.json<Receipt>('write', { op: 'plan',  new_graph: true, title: 'Scratch', tasks: [{ key: 'one', title: 'One' }] });
+    const kept = await mcp.json<Receipt>('write', { ...SITE });
+    const scratch = await mcp.json<Receipt>('write', {  new_graph: true, title: 'Scratch', tasks: [{ key: 'one', title: 'One' }] });
 
     await mcp.json('reset', { graph: scratch.graph, confirm: 'RESET' });
-    let listed = (await mcp.json<{ graphs: { id: string }[] }>('read', { what: 'graphs' })).graphs;
+    let listed = (await mcp.json<{ graphs: { id: string }[] }>('read', { include: ['graphs'] })).graphs;
     expect(listed.map((g) => g.id)).toEqual([kept.graph]);
 
     // The handle never stopped working -- writing to it un-hides the graph.
-    await mcp.json('write', { op: 'plan',  graph: scratch.graph, tasks: [{ key: 'back-again', title: 'Back again' }] });
-    listed = (await mcp.json<{ graphs: { id: string }[] }>('read', { what: 'graphs' })).graphs;
+    await mcp.json('write', {  graph: scratch.graph, tasks: [{ key: 'back-again', title: 'Back again' }] });
+    listed = (await mcp.json<{ graphs: { id: string }[] }>('read', { include: ['graphs'] })).graphs;
     expect(listed.map((g) => g.id).sort()).toEqual([kept.graph, scratch.graph].sort());
   });
 
   it('still resolves an emptied graph as the default, rather than jumping to an older one', async () => {
     const mcp = client();
-    await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
-    const scratch = await mcp.json<Receipt>('write', { op: 'plan',  new_graph: true, title: 'Scratch', tasks: [{ key: 'one', title: 'One' }] });
+    await mcp.json<Receipt>('write', { ...SITE });
+    const scratch = await mcp.json<Receipt>('write', {  new_graph: true, title: 'Scratch', tasks: [{ key: 'one', title: 'One' }] });
     await mcp.json('reset', { graph: scratch.graph, confirm: 'RESET' });
 
     // Clear it, then add to it without naming it: that has to land where
     // the user was working, not in the graph before it.
-    const added = await mcp.json<Receipt>('write', { op: 'plan',  tasks: [{ key: 'next-thing', title: 'Next thing' }] });
+    const added = await mcp.json<Receipt>('write', {  tasks: [{ key: 'next-thing', title: 'Next thing' }] });
 
     expect(added.graph).toBe(scratch.graph);
   });
@@ -250,7 +249,7 @@ describe('an empty graph is a deleted graph, for listing purposes', () => {
 describe('the graph itself lives behind a resource', () => {
   it('links to it from the receipt instead of inlining it', async () => {
     const mcp = client();
-    const result = await mcp.tool('write', { op: 'plan', ...SITE });
+    const result = await mcp.tool('write', { ...SITE });
     const receipt = JSON.parse(textOf(result)) as Receipt;
 
     expect(linksOf(result)).toEqual([`taskdag://graph/${receipt.graph}`]);
@@ -260,7 +259,7 @@ describe('the graph itself lives behind a resource', () => {
 
   it('serves every node and edge to whoever asks for it', async () => {
     const mcp = client();
-    const receipt = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    const receipt = await mcp.json<Receipt>('write', { ...SITE });
 
     const graph = await mcp.readResource<{ nodes: { key: string }[]; edges: unknown[]; ready: string[] }>(
       `taskdag://graph/${receipt.graph}`,
@@ -273,7 +272,7 @@ describe('the graph itself lives behind a resource', () => {
 
   it('refuses to serve another token\'s graph', async () => {
     const mcp = client();
-    const mine = await mcp.json<Receipt>('write', { op: 'plan', ...SITE });
+    const mine = await mcp.json<Receipt>('write', { ...SITE });
 
     await expect(mcp.as(OTHER_TOKEN).readResource(`taskdag://graph/${mine.graph}`)).rejects.toThrow();
   });

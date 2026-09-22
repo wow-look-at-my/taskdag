@@ -40,7 +40,7 @@ describe('context budget', () => {
     // Three tools, not ten: `read`, `write`, and `reset` on its own because
     // hosts grant permission per tool name.
     expect(tools.map((t) => t.name).sort()).toEqual(['read', 'reset', 'write']);
-    expect(bytes).toBeLessThan(7_500);
+    expect(bytes).toBeLessThan(5_000);
 
     // A tool with no description is a tool a model has to guess at. Two of
     // these shipped that way: the JSON carried `title` and the enum's
@@ -57,9 +57,7 @@ describe('context budget', () => {
 
   it('keeps every description to one sentence', () => {
     // Descriptions are paid for in every conversation, and a second
-    // sentence is almost always the first one restated. `oneOf` made this
-    // affordable: a branch that carries only its own fields does not need
-    // prose explaining when each field applies.
+    // sentence is almost always the first one restated.
     const descriptions: string[] = [];
     const walk = (node: unknown): void => {
       if (Array.isArray(node)) return node.forEach(walk);
@@ -70,7 +68,7 @@ describe('context budget', () => {
     };
     walk([READ_SCHEMA, WRITE_SCHEMA, RESET_SCHEMA]);
 
-    expect(descriptions.length).toBeGreaterThan(20);
+    expect(descriptions.length).toBeGreaterThan(15);
     for (const description of descriptions) {
       expect(description, description).not.toMatch(/[.!?]\s+[A-Z]/);
       expect(description.length, description).toBeLessThanOrEqual(90);
@@ -79,7 +77,7 @@ describe('context budget', () => {
 
   it('answers a 40-task plan with a receipt, not a graph', async () => {
     const mcp = client();
-    const result = await mcp.tool('write', { op: 'plan', ...BIG });
+    const result = await mcp.tool('write', { ...BIG });
     const text = textOf(result);
 
     // The graph this call just wrote is ~9kB of JSON. None of it is here.
@@ -90,23 +88,23 @@ describe('context budget', () => {
 
   it('answers show and ready in a couple of hundred characters', async () => {
     const mcp = client();
-    await mcp.json('write', { op: 'plan', ...BIG });
+    await mcp.json('write', { ...BIG });
 
-    expect(textOf(await mcp.tool('read', { what: 'board' })).length).toBeLessThan(400);
-    expect(textOf(await mcp.tool('read', { what: 'ready' })).length).toBeLessThan(400);
+    expect(textOf(await mcp.tool('read', {})).length).toBeLessThan(400);
+    expect(textOf(await mcp.tool('read', {})).length).toBeLessThan(400);
   });
 
   it('never lets a single tool result carry the whole graph', async () => {
     const mcp = client();
-    const planned = await mcp.json<{ graph: string }>('write', { op: 'plan', ...BIG });
+    const planned = await mcp.json<{ graph: string }>('write', { ...BIG });
 
     // Every tool, including the ones the board drives. The resource is the
     // only door to the full payload, and the model chooses to open it.
     for (const [name, args] of [
-      ['read', { what: 'board' }],
-      ['read', { what: 'ready', limit: 50 }],
-      ['write', { op: 'plan', edges: [{ from: 'step-1', to: 'step-40' }] }],
-      ['write', { op: 'update', key: 'step-1', status: 'done' }],
+      ['read', {}],
+      ['read', { limit: 50 }],
+      ['write', { edges: [{ from: 'step-1', to: 'step-40' }] }],
+      ['write', { tasks: [{ key: 'step-1', status: 'done' }] }],
     ] as const) {
       const text = textOf(await mcp.tool(name, { graph: planned.graph, ...args }));
       expect(text.length, `${name} result`).toBeLessThan(700);
@@ -117,7 +115,7 @@ describe('context budget', () => {
     const mcp = client();
     const essay = `Rewrite the ingestion pipeline so ${'that '.repeat(60)}it stops dropping events`;
 
-    const planned = await mcp.json<{ graph: string }>('write', { op: 'plan', 
+    const planned = await mcp.json<{ graph: string }>('write', { 
       title: 'Long titles',
       tasks: [{ key: 'ingestion', title: essay, detail: 'x'.repeat(50_000) }],
     });
@@ -130,20 +128,20 @@ describe('context budget', () => {
     // Repeated short: the receipt and the diagram are what cost per turn.
     // A ~330-character title and a 50kB detail, and the receipt is still a
     // receipt: the ellipsis is the proof it was shortened rather than refused.
-    const receipt = textOf(await mcp.tool('read', { what: 'ready',  graph: planned.graph }));
+    const receipt = textOf(await mcp.tool('read', {  graph: planned.graph }));
     expect(receipt.length).toBeLessThan(500);
     expect(receipt).toContain('…');
 
-    const drawn = await mcp.json<{ mermaid: string }>('read', { what: 'mermaid',  graph: planned.graph });
+    const drawn = await mcp.json<{ mermaid: string }>('read', { include: ['summary', 'mermaid'],  graph: planned.graph });
     expect(drawn.mermaid).toContain('…');
     expect(drawn.mermaid.length).toBeLessThan(700);
   });
 
   it('caps the one result that is meant to be read as text', async () => {
     const mcp = client();
-    await mcp.json('write', { op: 'plan', ...BIG });
+    await mcp.json('write', { ...BIG });
 
-    const drawn = await mcp.json<{ mermaid: string | null; overflow?: true }>('read', { what: 'mermaid' });
+    const drawn = await mcp.json<{ mermaid: string | null; overflow?: true }>('read', { include: ['summary', 'mermaid'] });
 
     // 40 tasks fit; the cap is what stops 400 from arriving whole.
     expect(drawn.overflow).toBeUndefined();

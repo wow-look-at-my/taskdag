@@ -1,7 +1,7 @@
 {
   "name": "read",
   "title": "Read a graph",
-  "description": "Read a task graph; the whole graph lives at taskdag://graph/<handle>.",
+  "description": "Read a task graph: select a part of it, then say what you want back about it.",
   "annotations": {
     "readOnlyHint": true,
     "destructiveHint": false,
@@ -11,137 +11,76 @@
   "inputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "oneOf": [
-      {
-        "type": "object",
-        "description": "Counts, the ready queue, and draws the card.",
-        "additionalProperties": false,
-        "required": [
-          "what"
+    "additionalProperties": false,
+    "properties": {
+      "graph": {
+        "$ref": "common.json#/graph_id"
+      },
+      "keys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 50,
+        "description": "Select only these tasks and their neighbourhood."
+      },
+      "depth": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10,
+        "default": 1,
+        "description": "Hops out from `keys`."
+      },
+      "direction": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "both"
         ],
-        "properties": {
-          "what": {
-            "const": "board"
-          },
-          "graph": {
-            "$ref": "common.json#/graph_id"
-          }
+        "default": "both",
+        "description": "up = prerequisites, down = dependents."
+      },
+      "status": {
+        "type": "array",
+        "items": {
+          "$ref": "common.json#/status"
+        },
+        "maxItems": 5,
+        "description": "Select only these statuses; seeds always survive."
+      },
+      "include": {
+        "type": "array",
+        "maxItems": 7,
+        "description": "What to return; the default is a summary and the ready queue.",
+        "items": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "ready",
+            "tasks",
+            "edges",
+            "detail",
+            "mermaid",
+            "graphs"
+          ]
         }
       },
-      {
-        "type": "object",
-        "description": "Tasks that can start now.",
-        "additionalProperties": false,
-        "required": [
-          "what"
-        ],
-        "properties": {
-          "what": {
-            "const": "ready"
-          },
-          "graph": {
-            "$ref": "common.json#/graph_id"
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "default": 5,
-            "description": "How many to name."
-          }
-        }
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 5,
+        "description": "How many ready tasks to name."
       },
-      {
-        "type": "object",
-        "description": "One task whole, with what blocks it.",
-        "additionalProperties": false,
-        "required": [
-          "what",
-          "key"
-        ],
-        "properties": {
-          "what": {
-            "const": "task"
-          },
-          "graph": {
-            "$ref": "common.json#/graph_id"
-          },
-          "key": {
-            "$ref": "common.json#/task_key",
-            "description": "Which task."
-          }
-        }
+      "max_chars": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Diagram budget, default 4000."
       },
-      {
-        "type": "object",
-        "description": "Every non-empty graph on this connector.",
-        "additionalProperties": false,
-        "required": [
-          "what"
-        ],
-        "properties": {
-          "what": {
-            "const": "graphs"
-          }
-        }
-      },
-      {
-        "type": "object",
-        "description": "A diagram; narrow it, this is the one answer that costs real tokens.",
-        "additionalProperties": false,
-        "required": [
-          "what"
-        ],
-        "properties": {
-          "what": {
-            "const": "mermaid"
-          },
-          "graph": {
-            "$ref": "common.json#/graph_id"
-          },
-          "keys": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 50,
-            "description": "Draw only around these tasks."
-          },
-          "depth": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10,
-            "default": 1,
-            "description": "Hops out from `keys`."
-          },
-          "direction": {
-            "type": "string",
-            "enum": [
-              "up",
-              "down",
-              "both"
-            ],
-            "default": "both",
-            "description": "up = prerequisites, down = dependents."
-          },
-          "status": {
-            "type": "array",
-            "items": {
-              "$ref": "common.json#/status"
-            },
-            "maxItems": 5,
-            "description": "Keep only these statuses; seeds always survive."
-          },
-          "max_chars": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Diagram budget, default 4000."
-          },
-          "override_token": {
-            "type": "string",
-            "description": "From a previous overflow; single use."
-          }
-        }
+      "override_token": {
+        "type": "string",
+        "description": "From a previous overflow; single use."
       }
-    ]
+    }
   }
 }

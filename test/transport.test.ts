@@ -129,7 +129,7 @@ async function receiptOf(res: Response): Promise<Record<string, unknown>> {
  * about the connection is involved.
  */
 async function graphKeys(e: { DB: D1Database }, token: string = TOKEN): Promise<string[]> {
-  const receipt = await receiptOf(await call(e, 'tools/call', { name: 'read', arguments: { what: 'board' } }, {}, token));
+  const receipt = await receiptOf(await call(e, 'tools/call', { name: 'read', arguments: {} }, {}, token));
   if (receipt.graph === null) return [];
   const uri = `taskdag://graph/${receipt.graph as string}`;
   const read = await result(await call(e, 'resources/read', { uri }, { 'mcp-name': uri }, token));
@@ -221,7 +221,7 @@ describe('the URL is the identity', () => {
 
     await call(e, 'tools/call', {
       name: 'write',
-      arguments: { op: 'plan', title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
+      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
     });
 
     // Nothing links these two requests: no session, no cookie, no stream.
@@ -234,7 +234,7 @@ describe('the URL is the identity', () => {
 
     await call(e, 'tools/call', {
       name: 'write',
-      arguments: { op: 'plan', title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
+      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
     });
 
     expect(await graphKeys(e, OTHER_TOKEN)).toEqual([]);

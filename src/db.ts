@@ -51,7 +51,8 @@ export interface GraphSummary extends GraphHandle {
 /** One task as `plan` accepts it. */
 export interface TaskInput {
   key: string;
-  title: string;
+  /** Required when the key is new; omitted leaves an existing title alone. */
+  title?: string;
   detail?: string;
   priority?: number;
   tags?: string[];
@@ -280,9 +281,9 @@ export async function mergeGraph(
   const incomingTasks = input.tasks ?? [];
   const incomingEdges = input.edges ?? [];
 
-  for (const task of incomingTasks) {
-    if (!task.title || !task.title.trim()) throw new GraphError('Every task needs a non-empty title.');
-  }
+  // A title is required to CREATE a task and optional to update one: the
+  // caller changing a status by key should not have to repeat the title it
+  // is not changing.
   for (const edge of incomingEdges) {
     if (edge.from === edge.to) throw new GraphError(`Self-dependency on "${edge.from}" is not a dependency.`);
   }
@@ -297,7 +298,10 @@ export async function mergeGraph(
   for (const task of incomingTasks) {
     const key = task.key.trim();
     if (!key) throw new GraphError('Every task needs a key.');
-    if (!existing.has(key) && isPlaceholderKey(key)) throw new GraphError(placeholderKeyMessage(task.key));
+    if (!existing.has(key)) {
+      if (isPlaceholderKey(key)) throw new GraphError(placeholderKeyMessage(task.key));
+      if (!task.title?.trim()) throw new GraphError(`New task "${key}" needs a title.`);
+    }
   }
 
   const keys = incomingTasks.map((task) => task.key.trim());
@@ -322,7 +326,7 @@ export async function mergeGraph(
             `INSERT INTO graph_tasks (id, graph_id, key, title, detail, status, priority, tags, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .bind(fresh, graph, key, task.title, task.detail ?? '', task.status ?? 'todo', task.priority ?? 0, tags ?? '[]', ts, ts),
+          .bind(fresh, graph, key, task.title!, task.detail ?? '', task.status ?? 'todo', task.priority ?? 0, tags ?? '[]', ts, ts),
       );
     } else {
       updated.push(key);
@@ -333,11 +337,11 @@ export async function mergeGraph(
         db
           .prepare(
             `UPDATE graph_tasks
-                SET title = ?, detail = COALESCE(?, detail), status = COALESCE(?, status),
+                SET title = COALESCE(?, title), detail = COALESCE(?, detail), status = COALESCE(?, status),
                     priority = COALESCE(?, priority), tags = COALESCE(?, tags), updated_at = ?
               WHERE graph_id = ? AND id = ?`,
           )
-          .bind(task.title, task.detail ?? null, task.status ?? null, task.priority ?? null, tags, ts, graph, id),
+          .bind(task.title ?? null, task.detail ?? null, task.status ?? null, task.priority ?? null, tags, ts, graph, id),
       );
     }
   });
