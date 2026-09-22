@@ -53,6 +53,10 @@ const HOST_PAGE = `<!doctype html>
   // A minimal MCP Apps host: ui/initialize, then the tool result, then
   // whatever tools the View calls get proxied — here, answered from fixtures.
   const BOARD = ${JSON.stringify(BOARD)};
+  const PARAMS = new URLSearchParams(location.search);
+  // ?theme=  (empty) reproduces a host that reports no theme at all.
+  const THEME = PARAMS.has('theme') ? PARAMS.get('theme') : 'light';
+  const FAIL = PARAMS.has('fail');
   const frame = document.getElementById('view');
   window.__calls = [];
 
@@ -68,17 +72,28 @@ const HOST_PAGE = `<!doctype html>
         protocolVersion: msg.params.protocolVersion,
         hostInfo: { name: 'check-board', version: '0.1.0' },
         hostCapabilities: {},
-        hostContext: { theme: 'light', displayMode: 'inline', containerDimensions: { width: 680, maxHeight: 520 } },
+        hostContext: {
+          ...(THEME ? { theme: THEME } : {}),
+          displayMode: 'inline',
+          containerDimensions: { width: 680, maxHeight: 520 },
+        },
       });
       return;
     }
     if (msg.method === 'ui/notifications/initialized') {
-      send({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [{ type: 'text', text: JSON.stringify(BOARD) }] } });
+      const params = FAIL
+        ? { isError: true, content: [{ type: 'text', text: 'D1_ERROR: no such table: graphs: SQLITE_ERROR' }] }
+        : { content: [{ type: 'text', text: JSON.stringify(BOARD) }] };
+      send({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params });
       return;
     }
     if (msg.method === 'tools/call') {
       window.__calls.push(msg.params);
       const name = msg.params.name;
+      if (FAIL) {
+        result(msg.id, { isError: true, content: [{ type: 'text', text: 'D1_ERROR: no such table: graphs: SQLITE_ERROR' }] });
+        return;
+      }
       if (name === 'get_task') {
         const key = msg.params.arguments.key;
         const node = BOARD.graph.nodes.find((n) => n.key === key);
@@ -110,11 +125,13 @@ const HOST_PAGE = `<!doctype html>
 </script>`;
 
 const server = createServer((req, res) => {
-  if (req.url === '/' || req.url === '/index.html') {
+  // Route on the PATH: the checks below pass options in the query string.
+  const { pathname } = new URL(req.url, 'http://127.0.0.1');
+  if (pathname === '/' || pathname === '/index.html') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(HOST_PAGE);
     return;
   }
-  if (req.url === '/board.html') {
+  if (pathname === '/board.html') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(readFileSync(BUNDLE, 'utf8'));
     return;
   }
@@ -149,6 +166,8 @@ const view = page.frameLocator('#view');
 await view.locator('#title').filter({ hasText: 'Site relaunch' }).waitFor({ timeout: 15000 });
 check('title comes from the tool result', true);
 check('ready queue is listed', (await view.locator('#ready').textContent()).includes('brand'));
+
+check('no task actions until something is selected', await view.locator('#actions').isHidden());
 
 const info = await view.locator('#graph').evaluate((el) => el.info);
 check('all five nodes laid out', info.nodeCount === 5, JSON.stringify(info));
@@ -188,9 +207,59 @@ check('Refresh called show', true);
 
 check('no page errors', errors.length === 0, errors.join(' | '));
 
+// 4. A failing tool says so on the card. An empty board reads as broken.
+const failPage = await (await browser.newContext({ colorScheme: 'dark' })).newPage();
+await failPage.goto(`http://127.0.0.1:${port}/?fail`);
+const failView = failPage.frameLocator('#view');
+await failView.locator('#status.error').filter({ hasText: 'no such table' }).waitFor({ timeout: 15000 });
+check('a failed tool shows its error on the card', true);
+
+// 5. Theming. A host that reports nothing must still follow the browser's
+//    dark preference rather than rendering a white card in a dark chat.
+async function bodyColors(url, colorScheme) {
+  const page = await (await browser.newContext({ colorScheme })).newPage();
+  await page.goto(url);
+  const view = page.frameLocator('#view');
+  await view.locator('#title').filter({ hasText: 'Site relaunch' }).waitFor({ timeout: 15000 });
+  const colors = await view.locator('#graph').evaluate((el) => ({
+    // Normalized: a browser may echo `#ffffff` back as `#fff`.
+    dagBg: getComputedStyle(el).getPropertyValue('--dag-bg').trim().replace(/^#([0-9a-f])\1([0-9a-f])\2([0-9a-f])\3$/i, '#$1$2$3'),
+    fg: getComputedStyle(document.body).color,
+    dataTheme: document.documentElement.dataset.theme ?? null,
+  }));
+  await page.close();
+  return colors;
+}
+
+const silentDark = await bodyColors(`http://127.0.0.1:${port}/?theme=`, 'dark');
+const LIGHT_BG = '#fff';
+const DARK_BG = '#11151c';
+check('dark browser + silent host → dark card', silentDark.dagBg === DARK_BG, JSON.stringify(silentDark));
+check('a silent host never yields a light card', silentDark.dataTheme !== 'light', JSON.stringify(silentDark));
+
+// A silent host is not proof of anything, whatever the browser reports: in
+// a sandboxed iframe "light" is also the no-preference default.
+const silentLight = await bodyColors(`http://127.0.0.1:${port}/?theme=`, 'light');
+check('light browser + silent host → still dark', silentLight.dagBg === DARK_BG, JSON.stringify(silentLight));
+
+const hostDark = await bodyColors(`http://127.0.0.1:${port}/?theme=dark`, 'light');
+check('host saying dark beats a light browser', hostDark.dagBg === DARK_BG && hostDark.dataTheme === 'dark', JSON.stringify(hostDark));
+
+const hostLight = await bodyColors(`http://127.0.0.1:${port}/?theme=light`, 'dark');
+check('host saying light beats a dark browser', hostLight.dagBg === LIGHT_BG && hostLight.dataTheme === 'light', JSON.stringify(hostLight));
+
 if (SHOT) {
   await page.screenshot({ path: SHOT });
   console.log(`  screenshot: ${SHOT}`);
+  // The dark card is the one that regressed, so it gets a picture too.
+  const darkShot = SHOT.replace(/(\.png)?$/, '-dark.png');
+  const darkPage = await (await browser.newContext({ colorScheme: 'dark', viewport: { width: 760, height: 480 } })).newPage();
+  await darkPage.goto(`http://127.0.0.1:${port}/?theme=`);
+  await darkPage.frameLocator('#view').locator('#title').filter({ hasText: 'Site relaunch' }).waitFor({ timeout: 15000 });
+  await darkPage.evaluate(() => (document.body.style.background = '#26262499'));
+  await darkPage.waitForTimeout(400);
+  await darkPage.screenshot({ path: darkShot });
+  console.log(`  screenshot: ${darkShot}`);
 }
 
 await browser.close();

@@ -165,6 +165,12 @@ something.
 `_meta.ui.domain` is set, for Claude, to `sha256(<the public token URL>).hex[:32] +
 ".claudemcpcontent.com"` — per-graph, and not a way back to the token.
 
+**The card is dark unless the host proves otherwise.** Inside a sandboxed iframe,
+`prefers-color-scheme: light` is also what a browser reports when nobody has expressed a
+preference, and `getDocumentTheme()` reads an attribute rather than the media query and falls back
+to light — so neither can distinguish a light user from a silent host. Only `hostContext.theme`
+can, and anything short of it saying `"light"` leaves the card dark.
+
 Hosts that ignore MCP Apps lose nothing important: every tool still returns compact JSON, and
 Mermaid text for graphs up to 60 nodes.
 
