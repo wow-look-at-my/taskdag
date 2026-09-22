@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb, rawDb } from './fake-d1.ts';
 import { SCHEMA_STATEMENTS, ensureSchema, statementsOf } from '../src/schema.ts';
 import dropSql from '../migrations/0003_drop_legacy_tables.sql';
-import { GraphError, createGraph, listGraphs, loadGraph, mergeGraph, resetGraph, resolveGraph } from '../src/db.ts';
+import { createGraph, deleteGraph, listGraphs, loadGraph, mergeGraph, resolveGraph } from '../src/db.ts';
 
 const TOKEN = 'kJ3nQ7vB9xZp2LmR8tW4yU6iO1aS5dF0gH-_cVbNxQe';
 const OTHER_TOKEN = 'zX9wQ2eR5tY7uI0oP3aS6dF8gH1jK4lZ-_cVbNmQwEr';
@@ -129,19 +129,6 @@ describe('0002 backfill', () => {
     expect(tableNames(fresh)).not.toContain('graphs');
   });
 
-  it('keeps a legacy T-keyed task editable, while refusing to create another', async () => {
-    // Graphs written before keys had to mean something are full of T1, T2.
-    // The rule is about CREATION: stranding those graphs would be worse
-    // than the placeholder keys they carry.
-    legacyGraph('aB3dEf7hJ9kLmN2pQr5sT8uV1wX4yZ6-_cVbNmQ', 'Old plan', ['T1', 'T2'], []);
-    const graph = (await resolveGraph(db, 'aB3dEf7hJ9kLmN2pQr5sT8uV1wX4yZ6-_cVbNmQ'))!.id;
-
-    await mergeGraph(db, graph, { tasks: [{ key: 'T1', title: 'Renamed, still T1' }] });
-    expect((await loadGraph(db, graph)).tasks.find((t) => t.key === 'T1')?.title).toBe('Renamed, still T1');
-
-    await expect(mergeGraph(db, graph, { tasks: [{ key: 'T3', title: 'A new one' }] })).rejects.toBeInstanceOf(GraphError);
-  });
-
   it('keeps serving the migrated graph as the default, with no handle passed', async () => {
     const graph = await resolveGraph(db, TOKEN);
 
@@ -153,32 +140,28 @@ describe('0002 backfill', () => {
   });
 });
 
-describe('the backfill after a reset', () => {
-  // `reset` is how a graph is deleted now, and it is the path that can
-  // reach this: emptying a migrated graph puts its task ids back in the
-  // state the backfill's "have I copied this row?" guard was written for.
-  it('does not refill a graph the owner just emptied', async () => {
+describe('the backfill after a delete', () => {
+  it('does not resurrect a graph the owner deleted', async () => {
     await ensureSchema(db);
     const [mine] = await listGraphs(db, TOKEN);
-    await resetGraph(db, mine.id);
+    expect(await deleteGraph(db, TOKEN, mine.id)).toBe(true);
 
-    // The cold start that would bring the tasks back: their ids are no
-    // longer in graph_tasks, so the per-row guard alone says "not copied".
+    // The cold start that used to bring it back: the owner has no handle
+    // again, so the "has this owner got one?" guard alone would re-mint it.
     await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
 
-    expect(await loadGraph(db, mine.id)).toMatchObject({ tasks: [], edges: [] });
-    // Emptied means unlisted, which is what makes reset a delete.
     expect(await listGraphs(db, TOKEN)).toEqual([]);
+    expect(await resolveGraph(db, TOKEN)).toBeNull();
     // The other token is untouched by any of it.
     expect(await listGraphs(db, OTHER_TOKEN)).toHaveLength(1);
   });
 
-  it('does not pour an emptied graph into a surviving one', async () => {
+  it('does not pour a deleted graph into a surviving one', async () => {
     await ensureSchema(db);
     const [migrated] = await listGraphs(db, TOKEN);
     const fresh = await createGraph(db, TOKEN, 'Later plan');
     await mergeGraph(db, fresh.id, { tasks: [{ key: 'new', title: 'Something else' }] });
-    await resetGraph(db, migrated.id);
+    await deleteGraph(db, TOKEN, migrated.id);
 
     await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
 

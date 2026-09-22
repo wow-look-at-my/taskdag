@@ -145,10 +145,9 @@ A migration that **alters or drops** an existing table is a different animal and
 request is how you lose data at 3am. `0003_drop_legacy_tables.sql` drops 0001's now-unused
 `graphs`/`tasks`/`edges`, and is **deliberately absent from `src/schema.ts`'s migration list** so
 the bootstrap can never run it; a test fails if it is added, or if any statement on the bootstrap
-path is a `DROP`/`ALTER`. Run it with `npm run drop-legacy`, which is the check and the drop in one command: it compares the
-legacy task count against the migrated one and **refuses to drop anything** if the copy is short,
-because until it runs those three tables are still the only other copy of the pre-handle rows —
-0002 copied them, it did not move them. Without `--confirm` it only reports the counts. Running `migrations apply` on a
+path is a `DROP`/`ALTER`. Run it by hand once you are satisfied the copy landed — those three
+tables are still the only copy of the pre-handle rows, since 0002 copied rather than moved them,
+and the file carries the query to check that with. Running `migrations apply` on a
 bootstrapped database is a harmless no-op.
 
 ### 3. Run it
@@ -205,54 +204,32 @@ An edge `{ from, to }` reads **"`from` depends on `to`"**: `to` must be done bef
 start. Mermaid output and the board both draw it the other way round — prerequisite first — because
 that is the direction work flows.
 
-`read` selects, then projects. `keys`/`depth`/`direction`/`status` pick a part of the graph;
-`include` says what to return about that part. The two are independent, which is the point — *"the
-ready queue **and** a diagram of what is blocking `staging`"* is one call:
+| Tool | What it does | Destructive |
+|---|---|---|
+| `plan` | Create/update tasks **and** edges in one call. **Merges — never deletes.** `new_graph: true` starts a separate plan. Renders the board. | no |
+| `link` / `unlink` | Add / remove dependency edges. | `unlink`: edges only |
+| `ready` | Tasks that can start now: `todo` with every dependency `done`. Renders the board. | no |
+| `update_task` | Change one task's status, title, detail, priority or tags. | no |
+| `get_task` | One task in full, with dependencies, dependents and what is blocking it. | no |
+| `show` | Draw the board, return the summary. | no |
+| `mermaid` | The graph as a diagram — selectable, and capped. See below. | no |
+| `graphs` | Every **non-empty** graph on this connector: handle, title, task count. | no |
+| `delete_graph` | **Removes a graph entirely**, handle included. Requires `{ "confirm": "DELETE" }` and an explicit handle. | **yes** |
+| `reset` | **Empties one graph.** Requires `{ "confirm": "RESET" }`. The handle survives. | **yes** |
 
-```json
-{ "keys": ["staging"], "depth": 1, "include": ["summary", "ready", "mermaid"] }
-```
+`delete_graph` is the one tool with **no default handle**: every other tool falls back to your most
+recent graph, and a default that empties the wrong one is recoverable where a default that deletes
+it is not. An emptied graph drops out of `graphs` — a list filling up with the husks of `reset`
+calls is a list nobody can read — but its handle keeps working, and writing to it puts it back.
+Resolution is deliberately not filtered the same way: clear a graph and add to it without naming
+it, and you land back in the one you just cleared rather than silently in an older one.
 
-| `include` | Adds |
-|---|---|
-| `summary` *(default)* | Handle, title, task and edge counts, status counts, and `selected` when narrowed |
-| `ready` *(default)* | The startable tasks, `limit` of them |
-| `tasks` | The selected tasks: key, title, status, priority, tags, `parents`, and what blocks each |
-| `detail` | Full titles and `detail` text on those tasks, instead of shortened ones |
-| `mermaid` | A diagram of the selection, subject to the budget below |
-| `graphs` | Every non-empty graph on this connector |
+`reset` is a separate tool rather than a `mode` on `plan` on purpose: hosts grant permission per
+tool *name*, so this is what lets you auto-approve `plan` while `reset` still stops and asks.
+`plan` has no replace or wipe flag at all.
 
-`write` takes **the same `graph` object `read` gives back** — a `title` and its `tasks` — so
-anything read can be sent straight back without being reshaped. `tasks` upserts by key. There is no
-separate edge list: a task names its own `parents`, which is what it waits for, so adding and
-removing a dependency are the same field and one call does both. Only `key` is required on a task,
-so changing a status is `{"tasks":[{"key":"staging","status":"done"}]}`; a title is required only
-when the key is new.
-
-**Every list-valued field — `parents`, `tags` — is written one of two ways, and there is no third
-verb:**
-
-| Sent | Means |
-|---|---|
-| *absent* | Leave the list alone |
-| `["a","b"]` | **Replace**: the list is now exactly this, so `[]` clears it and a shorter list drops what it leaves out |
-| `{"add":["c"],"remove":["a"]}` | **Edit in place**: `remove` first, then `add`, leaving everything unnamed where it was |
-
-Replace is the honest default — it is how a plan gets restated — but it makes "one more parent" a
-read-modify-write of every key that was already there, which is why the object spelling exists.
-Both are idempotent: removing what is not there, or adding what is, changes nothing.
-
-```json
-{"tasks":[{"key":"staging","parents":{"add":["brand"],"remove":["cms"]}}]}
-```
-
-`reset` stays its own tool: hosts grant permission per tool *name* and `destructiveHint` is per
-tool, so folding it in would make "you may tick tasks off" and "you may wipe the graph" one grant.
-
-**Descriptions are one sentence, always** — they are paid for in every conversation. The whole
-surface is **4,501 bytes**, against 6,801 for a version with a branch object per question and 9,181
-for the ten tools this started as. Tests hold both lines: nothing over 5,000 bytes, no description
-with a second sentence.
+Resources: `taskdag://graph/<handle>` (every node and edge — the payload the tools leave out),
+`taskdag://me` (identity, never the token) and `ui://taskdag/board` (the MCP App).
 
 ### What a result costs
 
@@ -279,39 +256,12 @@ quietly cost thousands of tokens. So:
 - **Select instead of dumping.** `keys` (+ `depth`, `direction`) draws a neighbourhood; `status`
   filters. Seeds always survive their own filter, and keys that match nothing select *nothing* —
   never, quietly, everything.
-- **The output is capped** at 4,000 characters *by default*. Over that you get the measurements
-  rather than half a diagram, because truncated Mermaid is a syntax error, not a smaller picture.
-- **The cap is against accidents, not against you.** `max_chars` takes any number, up or down: a
-  caller naming a size is not an accident, and there is no adversary here to withhold it from — it
-  is the same caller on both sides. An overflow also hands back a single-use `override_token`,
-  which renders that graph whole without having to know its size first.
-
-### What a task can carry
-
-| Field | Limit | Where it shows up |
-|---|---|---|
-| `key` | 2–64 chars, **required** | Every result, the diagram, the board, and how everything refers to the task |
-| `title` | none | Receipts and diagram labels, **shortened to 80 chars** where they repeat |
-| `detail` | none | `read(what="task")`, the graph resource, the board's selection panel — left out of receipts |
-| `tags` | 20 × 40 chars | The graph resource and the board |
-| `priority` | any integer | Ready-queue order |
-| per call | 200 tasks, 400 edges | One `db.batch`, which is one transaction |
-
-**Bound what is repeated, not what is stored.** A title is echoed into every receipt and every
-diagram, so an essay as a title would be paid for on every turn — but that is a reason to *shorten
-it where it repeats*, not to refuse the write. These schemas reject rather than truncate, and
-`plan` is atomic, so a single over-long field used to throw away a whole batch of good tasks to
-protect a label. Titles and details are now stored whole and shortened at the point of repetition;
-`taskdag://graph/<handle>` and `get_task` always return them intact.
-
-`detail` is the place to be generous: no tool result carries it, so its length costs nothing per
-call and it is there when the model actually opens that task.
-
-Two limits are real and stay. The **Mermaid budget** is tied to an actual cost — conversation
-tokens — and it defers rather than refuses, handing back a one-shot override token. The **200-task
-/ 400-edge** caps bound a single `db.batch`, which turns "fifty thousand tasks" into a clear
-message instead of a D1 timeout. The rest were round numbers, and round numbers that can fail
-somebody's unrelated work are not worth keeping.
+- **The output is capped** at 4,000 characters (8,000 if you ask). Over that, you get the
+  measurements rather than half a diagram, because truncated Mermaid is a syntax error, not a
+  smaller picture.
+- **The cap lifts only after it bites.** An overflow mints a single-use `override_token`, and that
+  token is the only way past the cap — for that graph, once. Asking for `max_chars: 500000` up
+  front is refused by the schema.
 
 **Graph rules.** Cycles are rejected by `link` and `plan`, with the cycle reported as task keys and
 nothing written. Self-edges are illegal, duplicate edges are idempotent. A cancelled dependency does
@@ -372,7 +322,6 @@ Hosts that ignore MCP Apps lose nothing important: every tool still returns comp
 npm test          # graph rules + merge semantics against real SQL
 npm run typecheck
 npm run check:board   # drives the compiled App in Chromium against a stand-in host
-npm run drop-legacy   # report the legacy/migrated counts; --confirm to run migration 0003
 ```
 
 `test/transport.test.ts` drives the real Worker entry point against that same fake, and asserts the
@@ -405,7 +354,6 @@ display mode with the host. On a machine whose Chromium lives outside `node_modu
 src/graph.ts    pure rules: cycles, ready set, keys, selection, mermaid (unit tested)
 src/db.ts       D1, owned by token and addressed by handle; merge, patch, reset (unit tested)
 src/tools.ts    the MCP tools and resources
-src/schemas/    one JSON Schema per tool, plus common.json for shared bits
 src/server.ts   one McpServer per request, closed over the token
 src/index.ts    routing: /, /:token/mcp, /health
 src/token.ts    what counts as an owner token

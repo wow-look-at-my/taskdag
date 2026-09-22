@@ -89,14 +89,14 @@ describe('ensureSchema', () => {
   it('is safe to run against a database that already has the schema', async () => {
     const db = createTestDb();
     const graph = (await createGraph(db, TOKEN)).id;
-    await mergeGraph(db, graph, { tasks: [{ key: 'survive', title: 'Survive the bootstrap' }] });
+    await mergeGraph(db, graph, { tasks: [{ key: 'T1', title: 'Survive the bootstrap' }] });
 
     await ensureSchema(db);
     await ensureSchema(db);
 
     // The data is still there: the DDL is CREATE ... IF NOT EXISTS and the
     // backfill is guarded, so a re-run is not a reset and not a duplicate.
-    expect((await loadGraph(db, graph)).tasks.map((t) => t.key)).toEqual(['survive']);
+    expect((await loadGraph(db, graph)).tasks.map((t) => t.key)).toEqual(['T1']);
   });
 
   it('lets the first tool call succeed against a database nobody migrated', async () => {
@@ -104,7 +104,7 @@ describe('ensureSchema', () => {
     // This is the deployed-but-unmigrated case, which used to answer
     // `no such table: graphs` to every single call.
     const graph = (await createGraph(db, TOKEN)).id;
-    await mergeGraph(db, graph, { title: 'Fresh', tasks: [{ key: 'first', title: 'First task' }] });
+    await mergeGraph(db, graph, { title: 'Fresh', tasks: [{ title: 'First task' }] });
     const state = await loadGraph(db, graph);
     expect(state.title).toBe('Fresh');
     expect(state.tasks).toHaveLength(1);
