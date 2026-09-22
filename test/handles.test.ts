@@ -196,6 +196,7 @@ describe('delete_graph', () => {
   });
 });
 
+
 describe('the graph itself lives behind a resource', () => {
   it('links to it from the receipt instead of inlining it', async () => {
     const mcp = client();
