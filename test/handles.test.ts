@@ -121,28 +121,37 @@ describe('a handle addresses the state', () => {
 });
 
 describe('the branches say what they need', () => {
-  // The schema does not carry allOf/if/then for these: it costs bytes in
-  // every conversation to restate what the handler can say better, with the
-  // name of the missing field in it.
+  // Each branch is its own object in a `oneOf`, so "task needs a key" is a
+  // real `required` on that branch rather than prose. The schema catches
+  // these before the handler sees them; the handler still checks, for hosts
+  // that do not validate.
   it('asks for a key when reading one task', async () => {
     const refused = await client().tool('read', { what: 'task' });
 
     expect(refused.isError).toBe(true);
-    expect(textOf(refused)).toContain('needs `key`');
+    expect(textOf(refused).toLowerCase()).toContain('key');
   });
 
   it('asks for a key when updating one task', async () => {
     const refused = await client().tool('write', { op: 'update', status: 'done' });
 
     expect(refused.isError).toBe(true);
-    expect(textOf(refused)).toContain('needs `key`');
+    expect(textOf(refused).toLowerCase()).toContain('key');
   });
 
   it('asks for edges when unlinking', async () => {
     const refused = await client().tool('write', { op: 'unlink' });
 
     expect(refused.isError).toBe(true);
-    expect(textOf(refused)).toContain('needs `edges`');
+    expect(textOf(refused).toLowerCase()).toContain('edges');
+  });
+
+  it('refuses a field that belongs to another branch', async () => {
+    // `limit` is the ready branch's. Under the old flat schema every field
+    // was optional on every branch, so this was silently ignored.
+    const refused = await client().tool('read', { what: 'board', limit: 5 });
+
+    expect(refused.isError).toBe(true);
   });
 
   it('refuses a plan that would write nothing', async () => {

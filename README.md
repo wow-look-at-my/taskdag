@@ -205,6 +205,11 @@ An edge `{ from, to }` reads **"`from` depends on `to`"**: `to` must be done bef
 start. Mermaid output and the board both draw it the other way round — prerequisite first — because
 that is the direction work flows.
 
+Each tool is a `oneOf` of branch objects, so a branch carries exactly its own fields and its own
+`required` — `what="task"` requires `key` in the schema, and `limit` does not exist outside
+`what="ready"`. Descriptions are one sentence, always: they are paid for in every conversation, and
+branch objects mean no prose is needed to explain when a field applies.
+
 | Tool | Branch | What it does | Destructive |
 |---|---|---|---|
 | `read` | `what="board"` | Counts, ready queue, and draws the card. | no |

@@ -17,6 +17,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { client, textOf } from './mcp-client.ts';
+import READ_SCHEMA from '../src/schemas/read.json';
+import RESET_SCHEMA from '../src/schemas/reset.json';
+import WRITE_SCHEMA from '../src/schemas/write.json';
 
 /** 40 tasks in a chain, with titles the length people actually write. */
 const BIG = {
@@ -37,7 +40,7 @@ describe('context budget', () => {
     // Three tools, not ten: `read`, `write`, and `reset` on its own because
     // hosts grant permission per tool name.
     expect(tools.map((t) => t.name).sort()).toEqual(['read', 'reset', 'write']);
-    expect(bytes).toBeLessThan(8_000);
+    expect(bytes).toBeLessThan(7_500);
 
     // A tool with no description is a tool a model has to guess at. Two of
     // these shipped that way: the JSON carried `title` and the enum's
@@ -49,6 +52,28 @@ describe('context budget', () => {
       // client has no common.json and no way to ask for one, so what goes
       // over the wire has to be self-contained.
       expect(JSON.stringify(tool.inputSchema), tool.name).not.toContain('$ref');
+    }
+  });
+
+  it('keeps every description to one sentence', () => {
+    // Descriptions are paid for in every conversation, and a second
+    // sentence is almost always the first one restated. `oneOf` made this
+    // affordable: a branch that carries only its own fields does not need
+    // prose explaining when each field applies.
+    const descriptions: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (node === null || typeof node !== 'object') return;
+      const record = node as Record<string, unknown>;
+      if (typeof record.description === 'string') descriptions.push(record.description);
+      Object.values(record).forEach(walk);
+    };
+    walk([READ_SCHEMA, WRITE_SCHEMA, RESET_SCHEMA]);
+
+    expect(descriptions.length).toBeGreaterThan(20);
+    for (const description of descriptions) {
+      expect(description, description).not.toMatch(/[.!?]\s+[A-Z]/);
+      expect(description.length, description).toBeLessThanOrEqual(90);
     }
   });
 

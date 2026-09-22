@@ -1,7 +1,7 @@
 {
   "name": "reset",
   "title": "Reset graph",
-  "description": "Irreversible. Empties a graph: every task and dependency in it. An emptied graph stops being listed, so this is also how a graph is deleted; the handle keeps working if you write to it again. Only when the user says clear, wipe, start over or delete. Never to make room for a new plan \u2014 write(op=plan) merges.",
+  "description": "Empties a graph, which is also how one is deleted.",
   "annotations": {
     "readOnlyHint": false,
     "destructiveHint": true,
@@ -19,7 +19,7 @@
     "properties": {
       "graph": {
         "$ref": "common.json#/graph_id",
-        "description": "Which graph. Required: this is the one call with no defaulting to the most recent."
+        "description": "Which graph; required, this call has no default."
       },
       "confirm": {
         "const": "RESET",

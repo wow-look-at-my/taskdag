@@ -247,7 +247,6 @@ interface WriteArgs {
   tasks?: TaskInput[];
   edges?: Edge[];
   key?: string;
-  task_title?: string;
   status?: TaskStatus;
   detail?: string;
   priority?: number;
@@ -307,7 +306,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   };
 
   // -- read ---------------------------------------------------------------------------
-  const readTool = { ...(READ_SCHEMA as ToolSchema), inputSchema: inlineRefs((READ_SCHEMA as ToolSchema).inputSchema) as JsonSchemaType };
+  const readTool = { ...(READ_SCHEMA as unknown as ToolSchema), inputSchema: inlineRefs((READ_SCHEMA as unknown as ToolSchema).inputSchema) as JsonSchemaType };
   registerAppTool(
     server,
     'read',
@@ -353,7 +352,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   );
 
   // -- write --------------------------------------------------------------------------
-  const writeTool = { ...(WRITE_SCHEMA as ToolSchema), inputSchema: inlineRefs((WRITE_SCHEMA as ToolSchema).inputSchema) as JsonSchemaType };
+  const writeTool = { ...(WRITE_SCHEMA as unknown as ToolSchema), inputSchema: inlineRefs((WRITE_SCHEMA as unknown as ToolSchema).inputSchema) as JsonSchemaType };
   registerAppTool(
     server,
     'write',
@@ -372,7 +371,10 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
           if (!args.key) return fail('write(op="update") needs `key`: which task?');
           const target = await existing(graph);
           const task = await patchTask(ctx.db, target.id, args.key, {
-            ...(args.task_title !== undefined ? { title: args.task_title } : {}),
+            // In this branch `title` is the TASK's: the plan branch is a
+            // separate object in the schema, so the name is no longer shared
+            // between "rename the graph" and "rename the task".
+            ...(args.title !== undefined ? { title: args.title } : {}),
             ...(args.status !== undefined ? { status: args.status } : {}),
             ...(args.detail !== undefined ? { detail: args.detail } : {}),
             ...(args.priority !== undefined ? { priority: args.priority } : {}),
@@ -400,7 +402,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   );
 
   // -- reset --------------------------------------------------------------------------
-  const resetTool = { ...(RESET_SCHEMA as ToolSchema), inputSchema: inlineRefs((RESET_SCHEMA as ToolSchema).inputSchema) as JsonSchemaType };
+  const resetTool = { ...(RESET_SCHEMA as unknown as ToolSchema), inputSchema: inlineRefs((RESET_SCHEMA as unknown as ToolSchema).inputSchema) as JsonSchemaType };
   registerAppTool(
     server,
     'reset',
