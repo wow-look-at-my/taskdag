@@ -1,0 +1,4 @@
+[submodule "third_party/js-snippets"]
+	path = third_party/js-snippets
+	url = https://github.com/wow-look-at-my/js-snippets.git
+	shallow = true

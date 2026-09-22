@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TaskDAG board</title>
+    <style>
+      /*
+       * An inline chat card, not a mini IDE: fixed chrome, one graph that
+       * owns its own pan and zoom, and NO nested page scrolling. The card
+       * grows to its content and the host sizes the iframe around it.
+       */
+      :root {
+        color-scheme: light dark;
+        --bg: transparent;
+        --fg: #16191f;
+        --muted: #5e6674;
+        --line: #dde1e9;
+        --chip: #f1f3f8;
+        --accent: #2563eb;
+      }
+      :root[data-theme='dark'] {
+        --fg: #e8ecf4;
+        --muted: #98a1b1;
+        --line: #2a3140;
+        --chip: #1b212b;
+        --accent: #6aa6ff;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; background: var(--bg); overflow: hidden; }
+      body {
+        color: var(--fg);
+        font: 13px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        padding: 10px 12px 12px;
+      }
+      header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+      #title { font-weight: 600; font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #ready { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+      /* The graph owns a fixed box and pans/zooms inside it. The page never scrolls. */
+      #graph {
+        display: block;
+        width: 100%;
+        height: 300px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+
+        --dag-bg: #ffffff;
+        --dag-fg: #16191f;
+        --dag-muted: #6b7280;
+        --dag-grid: rgba(20, 24, 33, 0.05);
+        --dag-hairline: rgba(20, 24, 33, 0.18);
+        --dag-edge: rgba(20, 24, 33, 0.32);
+        --dag-accent: #2563eb;
+        --dag-font: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+        --dag-layer-gap: 40px;
+      }
+      :root[data-theme='dark'] #graph {
+        --dag-bg: #11151c;
+        --dag-fg: #e8ecf4;
+        --dag-grid: rgba(200, 205, 216, 0.06);
+        --dag-hairline: rgba(200, 205, 216, 0.22);
+        --dag-edge: rgba(200, 205, 216, 0.42);
+        --dag-accent: #6aa6ff;
+      }
+
+      #selected { margin-top: 10px; min-height: 20px; }
+      .sel-head { font-size: 13px; }
+      .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
+      .detail { color: var(--muted); margin-top: 3px; }
+      .deps { color: var(--muted); font-size: 12px; margin-top: 2px; }
+      .hint { color: var(--muted); }
+      .pill {
+        display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px;
+        background: var(--chip); color: var(--muted); vertical-align: 1px;
+      }
+      .pill.in_progress { color: #2563eb; }
+      .pill.done { color: #16a34a; }
+      .pill.blocked { color: #dc2626; }
+
+      #actions { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
+      button {
+        font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 6px;
+        border: 1px solid var(--line); background: var(--chip); color: var(--fg); cursor: pointer;
+      }
+      button:hover:not(:disabled) { border-color: var(--accent); }
+      button:disabled { opacity: 0.45; cursor: default; }
+      #refresh { margin-left: auto; }
+      #status { color: var(--muted); font-size: 12px; min-height: 16px; margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div id="title">TaskDAG</div>
+      <div id="ready"></div>
+    </header>
+
+    <dag-view id="graph" orientation="LR" no-fullscreen-button no-minimap no-search empty-text="No tasks yet — ask for a plan."></dag-view>
+
+    <div id="selected"><span class="hint">Click a task to see what it is waiting on.</span></div>
+
+    <div id="actions" hidden>
+      <button id="start" type="button">Start</button>
+      <button id="done" type="button">Done</button>
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+    <div id="status"></div>
+
+    <script type="module" src="./board.ts"></script>
+  </body>
+</html>

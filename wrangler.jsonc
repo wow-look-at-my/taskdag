@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "taskdag",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  // The MCP SDK reaches for a few node builtins (crypto, buffer shims).
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // The landing page and the compiled MCP App bundle are imported as
+  // strings, which is what makes the deployed Worker self-contained: no
+  // asset binding, no CDN, no runtime fetch of the viewer.
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": false }],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "taskdag",
+      // Replace with the id `wrangler d1 create taskdag` prints.
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

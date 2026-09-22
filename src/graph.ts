@@ -1,0 +1,244 @@
+/**
+ * The graph half of TaskDAG: pure functions over tasks and edges, with no
+ * D1 and no MCP in sight, so the rules that decide what is ready and what
+ * is a cycle are unit-testable without a live database.
+ *
+ * EDGE DIRECTION, ONCE. A TaskDAG edge `{ from, to }` reads "`from` depends
+ * on `to`": `to` must be done before `from` can start. Every function here
+ * uses that direction, and the two places that flip it (the Mermaid text
+ * and the `<dag-view>` payload, both of which draw prerequisites first) say
+ * so where they flip it.
+ */
+
+/** The five states a task can be in. Mirrors the D1 CHECK constraint. */
+export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'blocked' | 'cancelled';
+
+export const TASK_STATUSES = ['todo', 'in_progress', 'done', 'blocked', 'cancelled'] as const satisfies readonly TaskStatus[];
+
+/** One task, as the rest of the server passes it around. */
+export interface Task {
+  key: string;
+  title: string;
+  detail: string;
+  status: TaskStatus;
+  priority: number;
+  tags: string[];
+}
+
+/** One dependency: `from` depends on `to`. */
+export interface Edge {
+  from: string;
+  to: string;
+}
+
+/** A task with only the fields the graph rules need. */
+type TaskLike = Pick<Task, 'key' | 'status'>;
+
+// -- Keys ---------------------------------------------------------------------------
+
+const AUTO_KEY = /^T(\d+)$/;
+
+/**
+ * The next free `T<n>` key for a graph that already holds `existing`.
+ *
+ * Numbering never reuses a gap: a graph that has had T1..T9 and lost T4
+ * still gets T10 next, because a key that comes back with a different task
+ * behind it is worse than a gap.
+ */
+export function nextAutoKey(existing: Iterable<string>): string {
+  let max = 0;
+  for (const key of existing) {
+    const m = AUTO_KEY.exec(key);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `T${max + 1}`;
+}
+
+/**
+ * Assigns `T<n>` keys to the entries of `incoming` that have none, without
+ * colliding with `existing` or with each other.
+ */
+export function assignKeys(existing: Iterable<string>, incoming: (string | undefined)[]): string[] {
+  const taken = new Set(existing);
+  const out: string[] = [];
+  for (const key of incoming) {
+    if (key) {
+      taken.add(key);
+      out.push(key);
+      continue;
+    }
+    const fresh = nextAutoKey(taken);
+    taken.add(fresh);
+    out.push(fresh);
+  }
+  return out;
+}
+
+// -- Cycles -------------------------------------------------------------------------
+
+/**
+ * The first dependency cycle in `edges`, as task keys in dependency order
+ * and closed (`["T1", "T2", "T1"]`), or `null` when the graph is acyclic.
+ *
+ * An iterative DFS rather than a recursive one: a 5000-node chain out of D1
+ * would blow the stack, and a tool that dies on a big graph is worse than a
+ * slightly longer function.
+ */
+export function findCycle(keys: Iterable<string>, edges: readonly Edge[]): string[] | null {
+  const adjacency = new Map<string, string[]>();
+  for (const key of keys) adjacency.set(key, []);
+  for (const edge of edges) {
+    if (!adjacency.has(edge.from)) adjacency.set(edge.from, []);
+    if (!adjacency.has(edge.to)) adjacency.set(edge.to, []);
+    adjacency.get(edge.from)!.push(edge.to);
+  }
+
+  const WHITE = 0, GREY = 1, BLACK = 2;
+  const color = new Map<string, number>();
+  for (const key of adjacency.keys()) color.set(key, WHITE);
+
+  for (const root of adjacency.keys()) {
+    if (color.get(root) !== WHITE) continue;
+    // Each frame is a node plus how far through its neighbours we are.
+    const stack: { key: string; i: number }[] = [{ key: root, i: 0 }];
+    color.set(root, GREY);
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1];
+      const neighbours = adjacency.get(frame.key)!;
+      if (frame.i >= neighbours.length) {
+        color.set(frame.key, BLACK);
+        stack.pop();
+        continue;
+      }
+      const next = neighbours[frame.i++];
+      const state = color.get(next) ?? WHITE;
+      if (state === GREY) {
+        // `next` is on the current path: the cycle is the tail of the stack
+        // from `next` onwards, closed back onto itself.
+        const at = stack.findIndex((f) => f.key === next);
+        return [...stack.slice(at).map((f) => f.key), next];
+      }
+      if (state === WHITE) {
+        color.set(next, GREY);
+        stack.push({ key: next, i: 0 });
+      }
+    }
+  }
+  return null;
+}
+
+/** True when `edges` contains no cycle. Self-edges count as cycles. */
+export function isAcyclic(keys: Iterable<string>, edges: readonly Edge[]): boolean {
+  return findCycle(keys, edges) === null;
+}
+
+// -- Ready --------------------------------------------------------------------------
+
+/**
+ * The tasks that can be picked up right now: status `todo`, with every
+ * dependency `done`.
+ *
+ * A cancelled dependency does NOT count as satisfied. Cancelling a
+ * prerequisite is a decision about that task, not a quiet approval of
+ * everything waiting on it — unlink it to actually unblock the dependent.
+ *
+ * Ordering is priority descending, then key, so "what's ready?" answers the
+ * same way twice in a row.
+ */
+export function readyKeys(tasks: readonly Task[], edges: readonly Edge[]): string[] {
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  const deps = new Map<string, string[]>();
+  for (const edge of edges) {
+    const list = deps.get(edge.from);
+    if (list) list.push(edge.to);
+    else deps.set(edge.from, [edge.to]);
+  }
+
+  const ready = tasks.filter((task) => {
+    if (task.status !== 'todo') return false;
+    for (const dep of deps.get(task.key) ?? []) {
+      const upstream = byKey.get(dep);
+      // An edge to a task that no longer exists blocks nothing.
+      if (upstream && upstream.status !== 'done') return false;
+    }
+    return true;
+  });
+
+  ready.sort((a, b) => b.priority - a.priority || compareKeys(a.key, b.key));
+  return ready.map((t) => t.key);
+}
+
+/** `T2` before `T10`: the auto keys sort as numbers, everything else as text. */
+export function compareKeys(a: string, b: string): number {
+  const ma = AUTO_KEY.exec(a);
+  const mb = AUTO_KEY.exec(b);
+  if (ma && mb) return Number(ma[1]) - Number(mb[1]);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Direct dependencies of `key` (what it is waiting on). */
+export function dependenciesOf(key: string, edges: readonly Edge[]): string[] {
+  return edges.filter((e) => e.from === key).map((e) => e.to);
+}
+
+/** Direct dependents of `key` (what is waiting on it). */
+export function dependentsOf(key: string, edges: readonly Edge[]): string[] {
+  return edges.filter((e) => e.to === key).map((e) => e.from);
+}
+
+/** Why a `todo` task is not ready: the dependencies that are not `done`. */
+export function blockedBy(key: string, tasks: readonly Task[], edges: readonly Edge[]): string[] {
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  return dependenciesOf(key, edges).filter((dep) => {
+    const upstream = byKey.get(dep);
+    return upstream !== undefined && upstream.status !== 'done';
+  });
+}
+
+// -- Mermaid ------------------------------------------------------------------------
+
+const MERMAID_CLASS: Record<TaskStatus, string> = {
+  todo: 'todo',
+  in_progress: 'doing',
+  done: 'done',
+  blocked: 'blocked',
+  cancelled: 'cancelled',
+};
+
+/**
+ * The graph as Mermaid text — the fallback for hosts that do not render MCP
+ * Apps, and the thing a model can read back without a picture.
+ *
+ * ARROWS POINT THE WAY WORK FLOWS: `prerequisite --> dependent`, which is
+ * the reverse of the stored edge and the same direction `<dag-view>` draws.
+ * One direction, stated here, used everywhere.
+ */
+export function toMermaid(tasks: readonly Task[], edges: readonly Edge[]): string {
+  const lines: string[] = ['graph TD'];
+  const known = new Set(tasks.map((t) => t.key));
+  const sorted = [...tasks].sort((a, b) => compareKeys(a.key, b.key));
+
+  for (const task of sorted) {
+    lines.push(`  ${mermaidId(task.key)}["${escapeMermaid(`${task.key}: ${task.title}`)}"]:::${MERMAID_CLASS[task.status]}`);
+  }
+  for (const edge of edges) {
+    if (!known.has(edge.from) || !known.has(edge.to)) continue;
+    lines.push(`  ${mermaidId(edge.to)} --> ${mermaidId(edge.from)}`);
+  }
+
+  lines.push('  classDef todo fill:#eef1f6,stroke:#8b93a5,color:#1d2433');
+  lines.push('  classDef doing fill:#dbeafe,stroke:#2563eb,color:#11224a');
+  lines.push('  classDef done fill:#dcfce7,stroke:#16a34a,color:#0d2a17');
+  lines.push('  classDef blocked fill:#fee2e2,stroke:#dc2626,color:#3c1010');
+  lines.push('  classDef cancelled fill:#f3f4f6,stroke:#c3c7d1,color:#9aa1ad');
+  return lines.join('\n');
+}
+
+/** Mermaid node ids may not be arbitrary text; task keys can be. */
+function mermaidId(key: string): string {
+  return `n${[...key].map((c) => (/[A-Za-z0-9]/.test(c) ? c : '_')).join('')}`;
+}
+
+function escapeMermaid(s: string): string {
+  return s.replace(/"/g, "'").replace(/[\r\n]+/g, ' ');
+}
