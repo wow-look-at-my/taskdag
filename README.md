@@ -235,8 +235,11 @@ filtered the same way: clear a graph and add to it without naming one, and you l
 you just cleared rather than silently in an older one.
 
 **The schemas are JSON, not zod.** `src/schemas/read.json`, `write.json` and `reset.json` are
-registered verbatim through `fromJsonSchema`, so what a client sees is those files — one per tool,
-each carrying the argument for its own existence in a `$comment`.
+registered through `fromJsonSchema`, so what a client sees is those files. `common.json` holds the
+things more than one of them needs — the handle's `^g_[0-9a-f]{16}$` pattern, the status enum, the
+shape of an edge — referenced with `$ref` and **inlined at registration**: a `$ref` is no use to a
+client that has no `common.json` and no way to fetch one, so the sharing is a source-level
+convenience and the emitted document stays self-contained. A test asserts no `$ref` survives.
 
 It deliberately carries **no `allOf`/`if`/`then`**. Saying "`key` is required when `what="task"`"
 that way cost 566 bytes of every conversation to restate something the discriminator's description
@@ -399,7 +402,7 @@ display mode with the host. On a machine whose Chromium lives outside `node_modu
 src/graph.ts    pure rules: cycles, ready set, keys, selection, mermaid (unit tested)
 src/db.ts       D1, owned by token and addressed by handle; merge, patch, reset (unit tested)
 src/tools.ts    the MCP tools and resources
-src/schemas/    one JSON Schema per tool, registered verbatim
+src/schemas/    one JSON Schema per tool, plus common.json for shared bits
 src/server.ts   one McpServer per request, closed over the token
 src/index.ts    routing: /, /:token/mcp, /health
 src/token.ts    what counts as an owner token

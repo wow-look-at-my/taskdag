@@ -45,6 +45,10 @@ describe('context budget', () => {
     for (const tool of tools) {
       expect(tool.description, tool.name).toBeTruthy();
       expect(tool.description.length, tool.name).toBeGreaterThan(40);
+      // The shared definitions in common.json are a source convenience. A
+      // client has no common.json and no way to ask for one, so what goes
+      // over the wire has to be self-contained.
+      expect(JSON.stringify(tool.inputSchema), tool.name).not.toContain('$ref');
     }
   });
 

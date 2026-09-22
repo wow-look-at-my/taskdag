@@ -23,6 +23,7 @@ import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE } from '@model
 import { ResourceTemplate, fromJsonSchema } from '@modelcontextprotocol/server';
 import type { JsonSchemaType, McpServer } from '@modelcontextprotocol/server';
 
+import COMMON_SCHEMA from './schemas/common.json';
 import READ_SCHEMA from './schemas/read.json';
 import RESET_SCHEMA from './schemas/reset.json';
 import WRITE_SCHEMA from './schemas/write.json';
@@ -181,6 +182,40 @@ async function guard<T>(run: () => Promise<T>): Promise<T | ReturnType<typeof fa
  * `then` makes it required for one value of the discriminator, which a type
  * cannot express and a host is not obliged to enforce, so the handlers check.
  */
+/**
+ * Inlines `{ "$ref": "common.json#/thing" }` before the schema is
+ * registered.
+ *
+ * WHY INLINE RATHER THAN SHIP THE REF. A `$ref` is only useful to something
+ * that can fetch what it points at, and the schema goes over the wire to
+ * clients that have no `common.json` and no way to ask for one. So the
+ * shared definitions are a source-level convenience -- one place to change
+ * the handle's pattern or the status enum -- and what a client sees is
+ * still a self-contained document. A test asserts no `$ref` survives.
+ *
+ * A sibling key alongside the `$ref` wins, which is what lets one call site
+ * say "a task key, and here is what it means HERE".
+ */
+function inlineRefs(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(inlineRefs);
+  if (node === null || typeof node !== 'object') return node;
+
+  const entries = Object.entries(node as Record<string, unknown>);
+  const ref = entries.find(([key]) => key === '$ref')?.[1];
+  const resolved: Record<string, unknown> = {};
+  if (typeof ref === 'string') {
+    const name = ref.replace('common.json#/', '');
+    const definition = (COMMON_SCHEMA as Record<string, unknown>)[name];
+    if (definition === undefined) throw new Error(`No common definition for "${ref}"`);
+    Object.assign(resolved, definition as Record<string, unknown>);
+  }
+  for (const [key, value] of entries) {
+    if (key === '$ref') continue;
+    resolved[key] = inlineRefs(value);
+  }
+  return resolved;
+}
+
 /** One file in `src/schemas/`. The cast is because a JSON import types
  * enums as `string`, which is not assignable to `JsonSchemaType`. */
 interface ToolSchema {
@@ -238,8 +273,12 @@ interface WriteArgs {
  * is not listed, so emptying already IS deleting.
  *
  * WHY THE SCHEMAS ARE JSON, AND IN THEIR OWN FILES. `src/schemas/*.json`
- * is handed to `fromJsonSchema` untouched, so what a client sees is those
- * files — one per tool, each carrying the argument for its own existence.
+ * is handed to `fromJsonSchema`, so what a client sees is those files: one
+ * per tool, plus `common.json` for the things more than one of them needs
+ * (the handle's pattern, the status enum, an edge). Those shared bits are
+ * inlined on the way out — see `inlineRefs` — because a `$ref` is no use to
+ * a client that cannot fetch it.
+ *
  * They state branch requirements in the discriminator's description rather
  * than in `allOf`/`if`/`then`: a conditional costs bytes in every
  * conversation to restate what the handler says better, naming the field
@@ -268,7 +307,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   };
 
   // -- read ---------------------------------------------------------------------------
-  const readTool = READ_SCHEMA as ToolSchema;
+  const readTool = { ...(READ_SCHEMA as ToolSchema), inputSchema: inlineRefs((READ_SCHEMA as ToolSchema).inputSchema) as JsonSchemaType };
   registerAppTool(
     server,
     'read',
@@ -314,7 +353,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   );
 
   // -- write --------------------------------------------------------------------------
-  const writeTool = WRITE_SCHEMA as ToolSchema;
+  const writeTool = { ...(WRITE_SCHEMA as ToolSchema), inputSchema: inlineRefs((WRITE_SCHEMA as ToolSchema).inputSchema) as JsonSchemaType };
   registerAppTool(
     server,
     'write',
@@ -361,7 +400,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   );
 
   // -- reset --------------------------------------------------------------------------
-  const resetTool = RESET_SCHEMA as ToolSchema;
+  const resetTool = { ...(RESET_SCHEMA as ToolSchema), inputSchema: inlineRefs((RESET_SCHEMA as ToolSchema).inputSchema) as JsonSchemaType };
   registerAppTool(
     server,
     'reset',

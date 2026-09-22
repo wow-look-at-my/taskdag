@@ -1,5 +1,4 @@
 {
-  "$comment": "The read half of the surface. Registered verbatim by src/tools.ts through fromJsonSchema, so what a client sees is this file. Branch requirements (task needs `key`) are stated in the `what` description and enforced in the handler, which can name the missing field; they are deliberately NOT allOf/if/then, which cost bytes in every conversation to say it less well.",
   "name": "read",
   "title": "Read a graph",
   "description": "Read a task graph: the board, the ready queue, one task in full, the graphs on this connector, or a Mermaid diagram. Pick with `what`. Results are summaries \u2014 the whole graph lives at taskdag://graph/<handle>.",
@@ -29,12 +28,10 @@
         "description": "board: counts + ready queue, and draws the card. ready: startable tasks only. task: one task whole \u2014 detail, dependencies, what blocks it (needs `key`). graphs: every graph on this connector. mermaid: a diagram \u2014 narrow it with keys/depth/direction/status, it is the one answer that costs real tokens."
       },
       "graph": {
-        "type": "string",
-        "pattern": "^g_[0-9a-f]{16}$",
-        "description": "Graph handle from an earlier result. Omit for the most recent."
+        "$ref": "common.json#/graph_id"
       },
       "key": {
-        "type": "string",
+        "$ref": "common.json#/task_key",
         "description": "Which task. Required for what=task."
       },
       "limit": {
@@ -71,14 +68,7 @@
       "status": {
         "type": "array",
         "items": {
-          "type": "string",
-          "enum": [
-            "todo",
-            "in_progress",
-            "done",
-            "blocked",
-            "cancelled"
-          ]
+          "$ref": "common.json#/status"
         },
         "maxItems": 5,
         "description": "Keep only these statuses. Seeds survive regardless."

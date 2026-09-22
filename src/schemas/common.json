@@ -1,0 +1,44 @@
+{
+  "graph_id": {
+    "type": "string",
+    "pattern": "^g_[0-9a-f]{16}$",
+    "description": "Graph handle from an earlier result. Omit for the most recent."
+  },
+  "task_key": {
+    "type": "string",
+    "minLength": 2,
+    "maxLength": 64,
+    "description": "A task key: a slug from the title, e.g. \"write-tests\". \"T3\" and bare numbers are refused."
+  },
+  "status": {
+    "type": "string",
+    "enum": ["todo", "in_progress", "done", "blocked", "cancelled"]
+  },
+  "tags": {
+    "type": "array",
+    "items": { "type": "string", "maxLength": 40 },
+    "maxItems": 20
+  },
+  "priority": {
+    "type": "integer",
+    "description": "Higher sorts first in the ready queue. Default 0."
+  },
+  "edges": {
+    "type": "array",
+    "maxItems": 400,
+    "description": "{ from, to } reads \"from depends on to\": to must be done first. Cycles and self-edges are refused; duplicates ignored.",
+    "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "string", "description": "Dependent key (waits)." },
+        "to": { "type": "string", "description": "Prerequisite key (first)." }
+      }
+    }
+  },
+  "detail": {
+    "type": "string",
+    "description": "Be generous: retrievable via read(what=task) and the graph resource, but left out of the receipts every other call returns, so length costs nothing per call."
+  }
+}

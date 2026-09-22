@@ -1,5 +1,4 @@
 {
-  "$comment": "Its own tool, and not a branch of `write`, because hosts grant permission per tool NAME: one writer would make \"you may tick tasks off\" and \"you may wipe the graph\" the same grant. There is no delete_graph either -- an emptied graph is not listed, so emptying IS deleting -- which is why this is the one call with no default handle.",
   "name": "reset",
   "title": "Reset graph",
   "description": "Irreversible. Empties a graph: every task and dependency in it. An emptied graph stops being listed, so this is also how a graph is deleted; the handle keeps working if you write to it again. Only when the user says clear, wipe, start over or delete. Never to make room for a new plan \u2014 write(op=plan) merges.",
@@ -19,8 +18,7 @@
     ],
     "properties": {
       "graph": {
-        "type": "string",
-        "pattern": "^g_[0-9a-f]{16}$",
+        "$ref": "common.json#/graph_id",
         "description": "Which graph. Required: this is the one call with no defaulting to the most recent."
       },
       "confirm": {

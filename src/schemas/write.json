@@ -1,5 +1,4 @@
 {
-  "$comment": "The write half. Everything here is additive or an edit -- MERGES, never deletes -- which is what lets a host auto-approve it. Emptying a graph is `reset`, a separate tool, because hosts grant permission per tool NAME and destructiveHint is per tool too.",
   "name": "write",
   "title": "Change a graph",
   "description": "Change a task graph: merge in tasks and dependencies, edit one task, or remove edges. Pick with `op`. Nothing here deletes \u2014 emptying a graph is `reset`.",
@@ -27,9 +26,7 @@
         "description": "plan: add or change tasks and dependencies \u2014 MERGES, never deletes, so a new plan needs no wipe (send `tasks`, `edges` or `title`). update: one task\u2019s status or fields (needs `key`). unlink: remove dependency edges, keeping the tasks (needs `edges`). Emptying or deleting a whole graph is `reset`, not here."
       },
       "graph": {
-        "type": "string",
-        "pattern": "^g_[0-9a-f]{16}$",
-        "description": "Graph handle. Omit for the most recent; op=plan mints one when there is none."
+        "$ref": "common.json#/graph_id"
       },
       "new_graph": {
         "type": "boolean",
@@ -53,10 +50,7 @@
           ],
           "properties": {
             "key": {
-              "type": "string",
-              "minLength": 2,
-              "maxLength": 64,
-              "description": "Required, and must mean something: a slug from the title, e.g. \"write-tests\". \"T3\" and bare numbers are refused."
+              "$ref": "common.json#/task_key"
             },
             "title": {
               "type": "string",
@@ -64,88 +58,42 @@
               "description": "Short imperative title. Kept whole; shortened to 80 chars where it repeats."
             },
             "detail": {
-              "type": "string",
-              "description": "Be generous: retrievable via read(what=task) and the graph resource, but left out of the receipts every other call returns, so length costs nothing per call."
+              "$ref": "common.json#/detail"
             },
             "status": {
-              "type": "string",
-              "enum": [
-                "todo",
-                "in_progress",
-                "done",
-                "blocked",
-                "cancelled"
-              ],
-              "description": "Omitted leaves an existing task's status alone."
+              "$ref": "common.json#/status",
+              "description": "Omitted leaves an existing task\u2019s status alone."
             },
             "priority": {
-              "type": "integer",
-              "description": "Higher sorts first in the ready queue. Default 0."
+              "$ref": "common.json#/priority"
             },
             "tags": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "maxLength": 40
-              },
-              "maxItems": 20
+              "$ref": "common.json#/tags"
             }
           }
         }
       },
       "edges": {
-        "type": "array",
-        "maxItems": 400,
-        "description": "op=plan adds these, op=unlink removes them. { from, to } reads \"from depends on to\": to must be done first. Cycles and self-edges are refused; duplicates are ignored.",
-        "items": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "from",
-            "to"
-          ],
-          "properties": {
-            "from": {
-              "type": "string",
-              "description": "Dependent key (waits)."
-            },
-            "to": {
-              "type": "string",
-              "description": "Prerequisite key (first)."
-            }
-          }
-        }
+        "$ref": "common.json#/edges"
       },
       "key": {
-        "type": "string",
+        "$ref": "common.json#/task_key",
         "description": "Which task. Required for op=update."
       },
       "status": {
-        "type": "string",
-        "enum": [
-          "todo",
-          "in_progress",
-          "done",
-          "blocked",
-          "cancelled"
-        ],
+        "$ref": "common.json#/status",
         "description": "Start, finish, reopen or cancel a task. Reopening does not reopen its dependents."
       },
       "detail": {
-        "type": "string",
+        "$ref": "common.json#/detail",
         "description": "Replaces the task detail."
       },
       "priority": {
-        "type": "integer",
+        "$ref": "common.json#/priority",
         "description": "Reorders the ready queue."
       },
       "tags": {
-        "type": "array",
-        "items": {
-          "type": "string",
-          "maxLength": 40
-        },
-        "maxItems": 20,
+        "$ref": "common.json#/tags",
         "description": "Replaces the task tags."
       },
       "task_title": {
