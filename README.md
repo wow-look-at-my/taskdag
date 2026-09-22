@@ -235,10 +235,14 @@ filtered the same way: clear a graph and add to it without naming one, and you l
 you just cleared rather than silently in an older one.
 
 **The schemas are JSON, not zod.** `src/tool-schemas.json` is registered verbatim through
-`fromJsonSchema`, so what a client sees is that file — including `allOf`/`if`/`then`, which says
-"`key` is required when `what="task"`" in the schema rather than in prose a model has to infer.
-Hosts are not obliged to enforce conditionals, so every branch is re-checked in the handler and
-answers with a message naming what was missing.
+`fromJsonSchema`, so what a client sees is that file.
+
+It deliberately carries **no `allOf`/`if`/`then`**. Saying "`key` is required when `what="task"`"
+that way cost 566 bytes of every conversation to restate something the discriminator's description
+already says and the handler says better — a schema rejection names a constraint, while the handler
+answers *`read(what="task")` needs `key`: which task?*. One of the two conditionals was worse than
+redundant: it forbade passing `graph` alongside `what="graphs"`, turning a harmless ignored
+argument into a hard failure.
 
 Resources: `taskdag://graph/<handle>` (every node and edge — the payload the tools leave out),
 `taskdag://me` (identity, never the token) and `ui://taskdag/board` (the MCP App).
@@ -268,12 +272,12 @@ quietly cost thousands of tokens. So:
 - **Select instead of dumping.** `keys` (+ `depth`, `direction`) draws a neighbourhood; `status`
   filters. Seeds always survive their own filter, and keys that match nothing select *nothing* —
   never, quietly, everything.
-- **The output is capped** at 4,000 characters (8,000 if you ask). Over that, you get the
-  measurements rather than half a diagram, because truncated Mermaid is a syntax error, not a
-  smaller picture.
-- **The cap lifts only after it bites.** An overflow mints a single-use `override_token`, and that
-  token is the only way past the cap — for that graph, once. Asking for `max_chars: 500000` up
-  front is refused by the schema.
+- **The output is capped** at 4,000 characters *by default*. Over that you get the measurements
+  rather than half a diagram, because truncated Mermaid is a syntax error, not a smaller picture.
+- **The cap is against accidents, not against you.** `max_chars` takes any number, up or down: a
+  caller naming a size is not an accident, and there is no adversary here to withhold it from — it
+  is the same caller on both sides. An overflow also hands back a single-use `override_token`,
+  which renders that graph whole without having to know its size first.
 
 ### What a task can carry
 

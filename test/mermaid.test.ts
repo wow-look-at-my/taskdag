@@ -1,12 +1,13 @@
 /**
- * The Mermaid dump: selectable, capped, and only uncapped on purpose.
+ * The Mermaid dump: selectable, and capped by default.
  *
  * WHY A CAP AT ALL. A diagram is the one tool result that is *meant* to be
  * read as text, which makes it the one place where a big graph can quietly
- * cost thousands of tokens per call. The cap makes that a decision instead
- * of an accident: the default answer to "draw the graph" is a diagram that
- * fits, and the whole thing is available to a caller that has been told it
- * does not fit and asks anyway.
+ * cost thousands of tokens per call. The cap makes that a decision rather
+ * than an accident — but only an accident. A caller naming `max_chars` gets
+ * that number, and an overflow hands back a token that renders the graph
+ * whole without needing to know its size first. There is no adversary here
+ * to withhold anything from; it is the same caller on both sides.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -30,7 +31,7 @@ interface Overflow {
   hint: string;
 }
 
-/** A chain T1 -> T2 -> ... of `n` tasks, with titles long enough to be realistic. */
+/** A chain step-1 -> step-2 -> … of `n` tasks, with realistic titles. */
 function chain(n: number) {
   return {
     title: 'Big plan',
@@ -56,9 +57,9 @@ describe('mermaid', () => {
     const mcp = client();
     await mcp.json('write', { op: 'plan', ...chain(20) });
 
-    const drawn = await mcp.json<Mermaid>('read', { what: 'mermaid',  keys: ['step-10'], depth: 1 });
+    const drawn = await mcp.json<Mermaid>('read', { what: 'mermaid', keys: ['step-10'], depth: 1 });
 
-    // T9 (prerequisite), T10 (seed), T11 (dependent), and nothing else.
+    // step-9 (prerequisite), step-10 (seed), step-11 (dependent), no more.
     expect(drawn.nodes).toBe(3);
     expect(drawn.of_nodes).toBe(20);
     expect(drawn.mermaid).toContain('Task number 10');
@@ -69,7 +70,7 @@ describe('mermaid', () => {
     const mcp = client();
     await mcp.json('write', { op: 'plan', ...chain(20) });
 
-    const up = await mcp.json<Mermaid>('read', { what: 'mermaid',  keys: ['step-10'], depth: 2, direction: 'up' });
+    const up = await mcp.json<Mermaid>('read', { what: 'mermaid', keys: ['step-10'], depth: 2, direction: 'up' });
 
     expect(up.nodes).toBe(3);
     expect(up.mermaid).toContain('Task number 8');
@@ -79,11 +80,11 @@ describe('mermaid', () => {
   it('filters by status, and never drops the seed', async () => {
     const mcp = client();
     const planned = await mcp.json<{ graph: string }>('write', { op: 'plan', ...chain(6) });
-    await mcp.json('write', { op: 'update',  graph: planned.graph, key: 'step-3', status: 'done' });
+    await mcp.json('write', { op: 'update', graph: planned.graph, key: 'step-3', status: 'done' });
 
-    const kept = await mcp.json<Mermaid>('read', { what: 'mermaid',  keys: ['step-3'], depth: 1, status: ['todo'] });
+    const kept = await mcp.json<Mermaid>('read', { what: 'mermaid', keys: ['step-3'], depth: 1, status: ['todo'] });
 
-    // T3 is done and still drawn: it is what was asked about.
+    // step-3 is done and still drawn: it is what was asked about.
     expect(kept.mermaid).toContain('Task number 3');
     expect(kept.nodes).toBe(3);
   });
@@ -92,7 +93,7 @@ describe('mermaid', () => {
     const mcp = client();
     await mcp.json('write', { op: 'plan', ...chain(4) });
 
-    const empty = await mcp.tool('read', { what: 'mermaid',  keys: ['nope'] });
+    const empty = await mcp.tool('read', { what: 'mermaid', keys: ['nope'] });
 
     expect(empty.isError).toBe(true);
     expect(textOf(empty)).toContain('Nothing selected');
@@ -112,7 +113,7 @@ describe('the cap, and the one way past it', () => {
     expect(over.override_token).toMatch(/^ov_[0-9a-f]{12}$/);
     // Not a truncated diagram: half a Mermaid document is a syntax error,
     // not a smaller picture.
-    expect(over).not.toHaveProperty('read', { what: 'mermaid' });
+    expect(over).not.toHaveProperty('mermaid');
   });
 
   it('suggests narrowing first, and says so differently once narrowed', async () => {
@@ -123,7 +124,7 @@ describe('the cap, and the one way past it', () => {
     // Narrowed, but not narrowed *enough* — every task is todo, so the
     // filter selects the whole graph and it still does not fit. That is the
     // case where the hint has to say something other than "try narrowing".
-    const narrowed = await mcp.json<Overflow>('read', { what: 'mermaid',  status: ['todo'] });
+    const narrowed = await mcp.json<Overflow>('read', { what: 'mermaid', status: ['todo'] });
 
     expect(whole.hint).toContain('Select a part of it');
     expect(narrowed.hint).toContain('Narrow further');
@@ -134,12 +135,12 @@ describe('the cap, and the one way past it', () => {
     await mcp.json('write', { op: 'plan', ...chain(120) });
     const over = await mcp.json<Overflow>('read', { what: 'mermaid' });
 
-    const whole = await mcp.json<Mermaid>('read', { what: 'mermaid',  override_token: over.override_token });
+    const whole = await mcp.json<Mermaid>('read', { what: 'mermaid', override_token: over.override_token });
     expect(whole.nodes).toBe(120);
     expect(whole.mermaid.length).toBeGreaterThan(over.limit);
 
     // Single use: the same token does not work twice.
-    const again = await mcp.tool('read', { what: 'mermaid',  override_token: over.override_token });
+    const again = await mcp.tool('read', { what: 'mermaid', override_token: over.override_token });
     expect(again.isError).toBe(true);
     expect(textOf(again)).toContain('already been used');
   });
@@ -148,22 +149,24 @@ describe('the cap, and the one way past it', () => {
     const mcp = client();
     await mcp.json('write', { op: 'plan', ...chain(120) });
     const over = await mcp.json<Overflow>('read', { what: 'mermaid' });
-    const other = await mcp.json<{ graph: string }>('write', { op: 'plan',  new_graph: true, title: 'Elsewhere', tasks: [{ key: 'one', title: 'One' }] });
+    const other = await mcp.json<{ graph: string }>('write', { op: 'plan', new_graph: true, title: 'Elsewhere', tasks: [{ key: 'one', title: 'One' }] });
 
-    const rejected = await mcp.tool('read', { what: 'mermaid',  graph: other.graph, override_token: over.override_token });
+    const rejected = await mcp.tool('read', { what: 'mermaid', graph: other.graph, override_token: over.override_token });
 
     expect(rejected.isError).toBe(true);
     expect(textOf(rejected)).toContain('not valid for this graph');
   });
 
-  it('cannot be talked past the cap by asking for a bigger budget', async () => {
+  it('takes a bigger budget at face value when one is asked for', async () => {
     const mcp = client();
     await mcp.json('write', { op: 'plan', ...chain(120) });
 
-    // The schema itself stops this: no amount of asking raises the ceiling,
-    // only a token from a render that actually overflowed does.
-    const greedy = await mcp.tool('read', { what: 'mermaid',  max_chars: 500000 });
+    // The default cap is there so a big graph cannot arrive whole by
+    // accident. Naming a number is not an accident, and there is no
+    // adversary here to withhold it from -- it is the same caller either way.
+    const asked = await mcp.json<Mermaid>('read', { what: 'mermaid', max_chars: 500_000 });
 
-    expect(greedy.isError).toBe(true);
+    expect(asked.nodes).toBe(120);
+    expect(asked.mermaid.length).toBeGreaterThan(4000);
   });
 });

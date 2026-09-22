@@ -66,8 +66,6 @@ const LABEL_CHARS = 80;
  * 200-node monster cannot land in the conversation by accident.
  */
 const DEFAULT_MERMAID_CHARS = 4000;
-/** The most a caller may ask for without having first been told it is too big. */
-const MAX_MERMAID_CHARS = 8000;
 
 export interface ToolContext {
   db: D1Database;
@@ -407,7 +405,11 @@ async function drawMermaid(ctx: ToolContext, args: ReadArgs) {
   if (args.override_token !== undefined && !unlocked) {
     return fail('That override_token is not valid for this graph, or has already been used. Ask for the diagram again to get a fresh one.');
   }
-  const limit = unlocked ? Number.POSITIVE_INFINITY : Math.min(args.max_chars ?? DEFAULT_MERMAID_CHARS, MAX_MERMAID_CHARS);
+  // The budget as asked for. The default is there so a 200-node graph
+  // cannot land whole by accident; a caller naming a number is not an
+  // accident, so it is taken at face value. The token stays because it
+  // answers "give me all of it" without having to know the size first.
+  const limit = unlocked ? Number.POSITIVE_INFINITY : (args.max_chars ?? DEFAULT_MERMAID_CHARS);
 
   if (text.length > limit) {
     // No half-diagram: truncated Mermaid is a syntax error, not a smaller
