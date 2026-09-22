@@ -293,8 +293,22 @@ preference, and `getDocumentTheme()` reads an attribute rather than the media qu
 to light — so neither can distinguish a light user from a silent host. Only `hostContext.theme`
 can, and anything short of it saying `"light"` leaves the card dark.
 
+**Getting things out of it.** The graph is painted on a canvas, so there is no text to select —
+**Copy** offers three shapes instead: *Markdown* (a checklist, with each task's prerequisites under
+it), *Mermaid* (a diagram) and *JSON* (the raw graph). The Mermaid comes from `src/graph.ts`'s own
+renderer, compiled into the bundle: `graph.ts` is pure, so the Worker and the App share one
+implementation rather than drifting apart as two. `navigator.clipboard` needs a permission the
+host's sandbox may withhold, so there is an `execCommand` fallback and, if both fail, the card says
+so rather than silently doing nothing.
+
+**Making it bigger.** `<dag-view>` brings its own fit, zoom and orientation buttons, and its
+fullscreen button is now enabled — it fills the iframe. Because the iframe is only as big as the
+host made the card, toggling it also asks the host for the matching display mode
+(`ui/request-display-mode`). A host that offers no fullscreen mode, or declines, still gets the
+in-iframe fill: the request never blocks the toggle.
+
 Hosts that ignore MCP Apps lose nothing important: every tool still returns compact JSON, and
-Mermaid text for graphs up to 60 nodes.
+`mermaid` renders the same diagram on demand.
 
 ## Tests
 
@@ -314,8 +328,9 @@ database — 0001's tables with rows in them — to prove the backfill gives an 
 without losing or duplicating it, however many times a cold start replays it. `test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
 tests exercise the actual SQL rather than a second implementation of it. `scripts/check-board.mjs`
 loads the compiled bundle in a browser, completes the MCP Apps handshake, and asserts that the
-graph draws, that selection fetches detail through the host, and that **Done** leaves as a
-`tools/call`. On a machine whose Chromium lives outside `node_modules`, point it at one:
+graph draws, that selection fetches detail through the host, that **Done** leaves as a
+`tools/call`, that each **Copy** format lands in a real clipboard, and that fullscreen negotiates a
+display mode with the host. On a machine whose Chromium lives outside `node_modules`, point it at one:
 `CHROME_PATH=/path/to/chromium npm run check:board`.
 
 ## Manual check list

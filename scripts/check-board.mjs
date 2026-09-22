@@ -73,6 +73,7 @@ const HOST_PAGE = `<!doctype html>
   const frame = document.getElementById('view');
   window.__calls = [];
   window.__reads = [];
+  window.__displayModes = [];
 
   const send = (msg) => frame.contentWindow.postMessage(msg, '*');
   const result = (id, value) => send({ jsonrpc: '2.0', id, result: value });
@@ -89,6 +90,7 @@ const HOST_PAGE = `<!doctype html>
         hostContext: {
           ...(THEME ? { theme: THEME } : {}),
           displayMode: 'inline',
+          availableDisplayModes: ['inline', 'fullscreen'],
           containerDimensions: { width: 680, maxHeight: 520 },
         },
       });
@@ -99,6 +101,11 @@ const HOST_PAGE = `<!doctype html>
         ? { isError: true, content: [{ type: 'text', text: 'D1_ERROR: no such table: graphs: SQLITE_ERROR' }] }
         : receipt();
       send({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params });
+      return;
+    }
+    if (msg.method === 'ui/request-display-mode') {
+      window.__displayModes.push(msg.params.mode);
+      result(msg.id, { mode: msg.params.mode });
       return;
     }
     if (msg.method === 'resources/read') {
@@ -242,6 +249,45 @@ check('the board re-drew after the write', (await view.locator('#done').textCont
 await view.locator('#refresh').click();
 await page.waitForFunction(() => window.__calls.some((c) => c.name === 'show'), null, { timeout: 5000 });
 check('Refresh called show', true);
+
+// 4. Copy: a canvas has no selectable text, so the card has to hand it over.
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: `http://127.0.0.1:${port}` });
+check('copy menu starts closed', await view.locator('#copymenu').isHidden());
+await view.locator('#copy').click();
+check('copy menu opens with three formats', (await view.locator('#copymenu button').count()) === 3);
+
+await view.locator('#copymenu button[data-format="mermaid"]').click();
+await view.locator('#status').filter({ hasText: 'Copied Mermaid' }).waitFor({ timeout: 5000 });
+const mermaid = await view.locator('body').evaluate(() => navigator.clipboard.readText());
+check('Mermaid copy is a diagram of the real graph', mermaid.startsWith('graph TD') && mermaid.includes('Homepage build'), mermaid.slice(0, 80));
+check('copy menu closes after choosing', await view.locator('#copymenu').isHidden());
+
+await view.locator('#copy').click();
+await view.locator('#copymenu button[data-format="markdown"]').click();
+await view.locator('#status').filter({ hasText: 'Copied Markdown' }).waitFor({ timeout: 5000 });
+const markdown = await view.locator('body').evaluate(() => navigator.clipboard.readText());
+check(
+  'Markdown copy is a checklist with dependencies',
+  markdown.includes('# Site relaunch') && markdown.includes('- [x] **homepage**') && markdown.includes('waits on: homepage'),
+  markdown.slice(0, 160),
+);
+
+await view.locator('#copy').click();
+await view.locator('#copymenu button[data-format="json"]').click();
+await view.locator('#status').filter({ hasText: 'Copied JSON' }).waitFor({ timeout: 5000 });
+const json = JSON.parse(await view.locator('body').evaluate(() => navigator.clipboard.readText()));
+check('JSON copy is the raw graph', json.nodes.length === 5 && json.edges.length === 4, JSON.stringify(json).slice(0, 80));
+
+// 5. Expanding: the element fills the iframe, and the host is asked to make
+// the iframe worth filling.
+await view.locator('#graph').evaluate((el) => el.shadowRoot.querySelector('.fs-btn').click());
+check('the element went fullscreen', await view.locator('#graph').evaluate((el) => el.hasAttribute('fullscreen')));
+await page.waitForFunction(() => window.__displayModes.includes('fullscreen'), null, { timeout: 5000 });
+check('the host was asked for a fullscreen card', true);
+
+await view.locator('#graph').evaluate((el) => el.shadowRoot.querySelector('.fs-btn').click());
+await page.waitForFunction(() => window.__displayModes.includes('inline'), null, { timeout: 5000 });
+check('leaving fullscreen asks for the card back', await view.locator('#graph').evaluate((el) => !el.hasAttribute('fullscreen')));
 
 check('no page errors', errors.length === 0, errors.join(' | '));
 
