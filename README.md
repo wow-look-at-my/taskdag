@@ -63,7 +63,7 @@ node/edge shape, follows selection, and calls MCP tools through the host.
 
 ```bash
 npx wrangler login
-npx wrangler d1 create taskdag          # paste the id into wrangler.jsonc
+npx wrangler d1 create taskdag-db       # paste the id into wrangler.jsonc
 npm run migrate:remote                  # or: npm run migrate:local
 ```
 

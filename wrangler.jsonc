@@ -23,7 +23,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "taskdag",
+      "database_name": "taskdag-db",
       // Replace with the id `wrangler d1 create taskdag` prints.
       "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
       "migrations_dir": "migrations"
