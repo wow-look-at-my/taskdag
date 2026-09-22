@@ -208,14 +208,13 @@ that is the direction work flows.
 | Tool | What it does | Destructive |
 |---|---|---|
 | `plan` | Create/update tasks **and** edges in one call. **Merges — never deletes.** `new_graph: true` starts a separate plan. Renders the board. | no |
-| `link` / `unlink` | Add / remove dependency edges. | `unlink`: edges only |
+| `unlink` | Remove dependency edges. The tasks stay. Adding edges is `plan`. | edges only |
 | `ready` | Tasks that can start now: `todo` with every dependency `done`. Renders the board. | no |
 | `update_task` | Change one task's status, title, detail, priority or tags. | no |
 | `get_task` | One task in full, with dependencies, dependents and what is blocking it. | no |
 | `show` | Draw the board, return the summary. | no |
 | `mermaid` | The graph as a diagram — selectable, and capped. See below. | no |
 | `graphs` | Every **non-empty** graph on this connector: handle, title, task count. | no |
-| `delete_graph` | **Removes a graph entirely**, handle included. Requires `{ "confirm": "DELETE" }` and an explicit handle. | **yes** |
 | `reset` | **Empties one graph.** Requires `{ "confirm": "RESET" }`. The handle survives. | **yes** |
 
 `delete_graph` is the one tool with **no default handle**: every other tool falls back to your most

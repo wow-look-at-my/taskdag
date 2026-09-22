@@ -1,5 +1,5 @@
 /**
- * The MCP surface: eleven tools and three resources, all owned by one token.
+ * The MCP surface: ten tools and three resources, all owned by one token.
  *
  * THREE THINGS SHAPE THIS FILE.
  *
@@ -272,7 +272,8 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
       title: 'Plan / merge tasks',
       description:
         'Create or update tasks and dependencies, and show the board. MERGES: an existing key is updated in place, new keys and ' +
-        `edges are added, nothing is deleted. Also the way to add one task. \`new_graph\` starts a separate plan. ${EDGE_NOTE}`,
+        'edges are added, nothing is deleted. The way to add one task, or to wire up dependencies between tasks that already ' +
+        `exist — pass \`edges\` alone. \`new_graph\` starts a separate plan. ${EDGE_NOTE}`,
       inputSchema: z.object({
         graph: graphArg,
         new_graph: z.boolean().optional().describe('Mint a separate graph. Ignored when `graph` is given.'),
@@ -292,26 +293,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
       }),
   );
 
-  // 3. link / unlink — dependency edges on their own.
-  registerAppTool(
-    server,
-    'link',
-    {
-      title: 'Add dependencies',
-      description: `Add dependency edges between existing tasks. Cycles and self-edges are rejected, duplicates ignored. ${EDGE_NOTE}`,
-      inputSchema: z.object({ graph: graphArg, edges: z.array(edgeSchema).min(1).max(400) }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      _meta: { ui: { visibility: ['model'] } },
-    },
-    async ({ graph, edges }) =>
-      guard(async () => {
-        const target = await existing(graph, 'link in');
-        const merged = await mergeGraph(ctx.db, target.id, { edges });
-        const state = await loadGraph(ctx.db, target.id);
-        return receipt(state, { linked: merged.linked });
-      }),
-  );
-
+  // 3. unlink — the only way to remove an edge. Adding one is `plan`.
   registerAppTool(
     server,
     'unlink',

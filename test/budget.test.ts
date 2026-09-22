@@ -34,7 +34,7 @@ describe('context budget', () => {
     const tools = await client().tools();
     const bytes = JSON.stringify(tools).length;
 
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(10);
     expect(bytes).toBeLessThan(10_000);
   });
 
@@ -66,7 +66,7 @@ describe('context budget', () => {
     for (const [name, args] of [
       ['show', {}],
       ['ready', { limit: 50 }],
-      ['link', { edges: [{ from: 'step-1', to: 'step-40' }] }],
+      ['plan', { edges: [{ from: 'step-1', to: 'step-40' }] }],
       ['update_task', { key: 'step-1', status: 'done' }],
     ] as const) {
       const text = textOf(await mcp.tool(name, { graph: planned.graph, ...args }));
