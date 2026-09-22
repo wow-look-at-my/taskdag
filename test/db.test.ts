@@ -10,16 +10,27 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from './fake-d1.ts';
-import { GraphError, getTask, loadGraph, mergeGraph, patchTask, resetGraph, unlinkEdges } from '../src/db.ts';
+import { GraphError, createGraph, getTask, loadGraph, mergeGraph, patchTask, resetGraph, unlinkEdges } from '../src/db.ts';
 import { readyKeys } from '../src/graph.ts';
 
-const OWNER = 'kJ3nQ7vB9xZp2LmR8tW4yU6iO1aS5dF0gH-_cVbNxQe';
-const OTHER = 'zX9wQ2eR5tY7uI0oP3aS6dF8gH1jK4lZ-_cVbNmQwEr';
+const TOKEN = 'kJ3nQ7vB9xZp2LmR8tW4yU6iO1aS5dF0gH-_cVbNxQe';
+const OTHER_TOKEN = 'zX9wQ2eR5tY7uI0oP3aS6dF8gH1jK4lZ-_cVbNmQwEr';
+
+/**
+ * The handles under test. Every function in db.ts is addressed by a graph
+ * handle now, not by the token: the token's job is deciding which handles
+ * exist, and `resolveGraph` is the only place the two meet. These are minted
+ * per test so no case can lean on another's rows.
+ */
+let OWNER: string;
+let OTHER: string;
 
 let db: D1Database;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = createTestDb();
+  OWNER = (await createGraph(db, TOKEN)).id;
+  OTHER = (await createGraph(db, OTHER_TOKEN)).id;
 });
 
 const SITE = {

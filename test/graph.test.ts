@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { assignKeys, blockedBy, findCycle, isAcyclic, nextAutoKey, readyKeys, toMermaid } from '../src/graph.ts';
+import { assignKeys, blockedBy, findCycle, isAcyclic, nextAutoKey, readyKeys, selectSubgraph, toMermaid } from '../src/graph.ts';
 import type { Edge, Task, TaskStatus } from '../src/graph.ts';
 import { isOwnerToken } from '../src/token.ts';
 
@@ -143,5 +143,54 @@ describe('isOwnerToken', () => {
     expect(isOwnerToken(`${real}x`)).toBe(false);
     expect(isOwnerToken(`${real.slice(0, 42)}+`)).toBe(false);
     expect(isOwnerToken('3f2504e0-4f89-11d3-9a0c-0305e82c3301')).toBe(false);
+  });
+});
+
+describe('selectSubgraph', () => {
+  const tasks: Task[] = ['a', 'b', 'c', 'd'].map((key, i) => ({
+    key,
+    title: key.toUpperCase(),
+    detail: '',
+    status: i === 3 ? 'done' : 'todo',
+    priority: 0,
+    tags: [],
+  }));
+  // a <- b <- c <- d, i.e. b depends on a, c on b, d on c.
+  const edges: Edge[] = [
+    { from: 'b', to: 'a' },
+    { from: 'c', to: 'b' },
+    { from: 'd', to: 'c' },
+  ];
+
+  it('returns everything when nothing is selected', () => {
+    expect(selectSubgraph(tasks, edges).tasks).toHaveLength(4);
+  });
+
+  it('walks out from the seeds, both ways, one hop by default', () => {
+    const { tasks: kept } = selectSubgraph(tasks, edges, { keys: ['b'] });
+    expect(kept.map((t) => t.key).sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('follows depth, and only the direction asked for', () => {
+    expect(selectSubgraph(tasks, edges, { keys: ['d'], depth: 2, direction: 'up' }).tasks.map((t) => t.key).sort()).toEqual(['b', 'c', 'd']);
+    expect(selectSubgraph(tasks, edges, { keys: ['a'], depth: 5, direction: 'up' }).tasks.map((t) => t.key)).toEqual(['a']);
+  });
+
+  it('keeps only edges with both ends still standing', () => {
+    const { edges: kept } = selectSubgraph(tasks, edges, { keys: ['a'], depth: 1 });
+    expect(kept).toEqual([{ from: 'b', to: 'a' }]);
+  });
+
+  it('filters by status but never drops a seed', () => {
+    // `d` is done and is the seed, so it survives its own filter; `c` is
+    // todo and one hop away, so it comes along.
+    const { tasks: kept } = selectSubgraph(tasks, edges, { keys: ['d'], status: ['todo'] });
+    expect(kept.map((t) => t.key).sort()).toEqual(['c', 'd']);
+  });
+
+  it('selects NOTHING for keys that do not exist, rather than everything', () => {
+    // The expensive failure mode: a misspelled key quietly meaning "the
+    // whole graph" is both the wrong answer and the priciest one.
+    expect(selectSubgraph(tasks, edges, { keys: ['ghost'] }).tasks).toEqual([]);
   });
 });
