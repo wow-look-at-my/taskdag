@@ -111,6 +111,20 @@
       /* Always-on chrome: copying and refreshing must not require having
          selected a task first, the way Start/Done do. */
       #tools { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
+      /* Expanding grows the graph IN FLOW. The element's own fullscreen mode
+         is `position: fixed; inset: 0`, which fills the iframe viewport and
+         takes the canvas out of the document -- the card's title, buttons
+         and status line then sit behind a full-bleed canvas, and a host that
+         sizes the frame to its content sees the body collapse. Growing a
+         height keeps every part of the card where it belongs. */
+      /* Expanded inside the card the host already gave us: taller, still
+         bounded, still in flow. */
+      :root[data-expanded] #graph { height: 520px; }
+      /* Expanded because the host actually handed over a full panel: fill
+         it, minus the chrome above and below. Keyed on the host's reported
+         mode rather than on our own request, so leaving fullscreen by the
+         host's own control puts the height back. */
+      :root[data-display='fullscreen'] #graph { height: calc(100vh - 150px); }
       #refresh { margin-left: auto; }
       #copywrap { position: relative; }
       /* The menu opens UPWARDS. The body is overflow:hidden and the card is
@@ -138,7 +152,7 @@
       <div id="ready"></div>
     </header>
 
-    <dag-view id="graph" orientation="LR" no-minimap no-search empty-text="No tasks yet — ask for a plan."></dag-view>
+    <dag-view id="graph" orientation="LR" no-fullscreen-button no-minimap no-search empty-text="No tasks yet — ask for a plan."></dag-view>
 
     <div id="selected"><span class="hint">Click a task to see what it is waiting on.</span></div>
 
@@ -156,6 +170,7 @@
           <button type="button" role="menuitem" data-format="json">JSON<span class="what">raw graph</span></button>
         </div>
       </div>
+      <button id="expand" type="button" aria-pressed="false">Expand</button>
       <button id="refresh" type="button">Refresh</button>
     </div>
     <div id="status"></div>
