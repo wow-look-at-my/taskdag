@@ -31,9 +31,10 @@ That URL is the connector URL, and it is also the password.
   looks like real entropy (43 base64url characters, ≥16 distinct) — `test`, `foobar` and UUIDs are
   rejected with a 400, and a bare `/mcp` is a 404.
 - **Anyone who has the URL has full read/write on that graph.** Bookmark it; don't post it.
-- **One working graph per token URL.** Two chats pointed at the same URL share one graph. Reload
-  `/` to mint a new, empty one — the old graph keeps living at its own URL. `reset` wipes only the
-  graph belonging to the token it was called on.
+- **One token, as many graphs as you like.** Each graph has a server-minted handle (`g_…`) that
+  every result carries and every tool accepts; omit it and you get the most recent one. `graphs`
+  lists them. Two chats pointed at the same URL can work on the same graph or on different ones —
+  the handle decides, not the connection. `reset` empties one graph and leaves the handle standing.
 - Tool results, resources and the App **never contain the token**. `taskdag://me` returns
   `{ owner: "capability-url", token_tail: "…" }` and nothing more.
 - The trade versus OAuth: the host you paste it into (Anthropic, for claude.ai) stores the
@@ -59,10 +60,16 @@ plumbing. The closest thing to a name in any of them is `clientInfo`, which is t
 (`"ClaudeAI"` from claude.ai, `"claude-code"` from the CLI) and its version — not a person.
 
 So the two sanctioned answers are OAuth for *who* and a server-minted handle passed on every call
-for *which working set*. The token in the path is TaskDAG's handle: minted in your browser instead
-of by the server, and riding in the URL instead of in an argument, but read fresh from every single
-request, which is the property the rule is about. It is **not** authentication of a person — see the
-trade above.
+for *which working set*. TaskDAG implements the second one literally: `graph` is minted by the
+server, returned in every result, and accepted as an ordinary argument on every tool — SEP-2567 as
+written. The path token answers the *other* question, and answers it as a capability rather than as
+identity: it is read fresh from every request, which is the property the statelessness rule is
+about, but it is **not** authentication of a person — see the trade above.
+
+The two never blur together. A handle is an address inside one token's partition and is safe to
+show the model; the token is the credential and never appears in a result. `resolveGraph` is the
+single place they meet, and it binds the owner alongside the handle — so another token's handle
+reads as "no graph with that handle", exactly like one that was never minted.
 
 What the server does with the machinery that was removed, all pinned by `test/transport.test.ts`:
 
@@ -115,15 +122,22 @@ deployment's database — it is an identifier, not a credential, and it has to b
 a Cloudflare Workers Build reads the binding straight out of the file. Deploying to a *different*
 account means creating your own database and replacing that id.
 
-**A fresh database needs no migration step.** The Worker applies `migrations/0001_init.sql` — the
-file itself, imported as text, not a second copy of the DDL — on its first database call, and every
-statement in it is `CREATE ... IF NOT EXISTS`. So a deploy pointed at an empty D1 works
-immediately instead of answering *no such table: graphs* until somebody remembers `wrangler d1
-migrations apply`.
+**A fresh database needs no migration step, and neither did the handles.** The Worker applies the
+migration files themselves — imported as text, not a second copy of the DDL — on its first database
+call. So a deploy pointed at an empty D1 works immediately instead of answering *no such table:
+graphs* until somebody remembers `wrangler d1 migrations apply`, and an existing deployment picked
+up `0002_graph_handles.sql` on its next request with its graphs intact.
 
-That bootstrap covers the initial schema and nothing more. A **later** migration that alters
-existing tables still goes through `npm run migrate:remote`, deliberately: a schema change that
-runs itself on the first request is how you lose data at 3am. Running `migrations apply` on a
+That is possible because **every statement in `migrations/` is idempotent**: `CREATE ... IF NOT
+EXISTS`, or a backfill whose `WHERE NOT EXISTS` makes a second run do nothing. `0002` adds tables
+beside `0001`'s and copies the rows across rather than rebuilding them, which is what makes it safe
+to re-run on every cold start. A test enforces the rule, because it is the only thing standing
+between a bootstrap and a duplicated graph.
+
+A migration that **alters or drops** an existing table is a different animal and still goes through
+`npm run migrate:remote` by hand, deliberately: a schema change that runs itself on the first
+request is how you lose data at 3am. Dropping 0001's now-unused `graphs`/`tasks`/`edges` tables is
+that kind of migration, and is deliberately not written yet. Running `migrations apply` on a
 bootstrapped database is a harmless no-op.
 
 ### 3. Run it
@@ -182,20 +196,54 @@ that is the direction work flows.
 
 | Tool | What it does | Destructive |
 |---|---|---|
-| `plan` | Create/update tasks **and** edges in one call. **Merges — never deletes.** Renders the board. | no |
-| `add_tasks` | Append tasks, no edges. Merges by key. | no |
+| `plan` | Create/update tasks **and** edges in one call. **Merges — never deletes.** `new_graph: true` starts a separate plan. Renders the board. | no |
 | `link` / `unlink` | Add / remove dependency edges. | `unlink`: edges only |
 | `ready` | Tasks that can start now: `todo` with every dependency `done`. Renders the board. | no |
 | `update_task` | Change one task's status, title, detail, priority or tags. | no |
 | `get_task` | One task in full, with dependencies, dependents and what is blocking it. | no |
-| `show` | `summary` \| `mermaid` \| `json`. Renders the board. | no |
-| `reset` | **Wipes the whole graph.** Requires `{ "confirm": "RESET" }`. | **yes** |
+| `show` | Draw the board, return the summary. | no |
+| `mermaid` | The graph as a diagram — selectable, and capped. See below. | no |
+| `graphs` | Every graph on this connector: handle, title, task count. | no |
+| `reset` | **Empties one graph.** Requires `{ "confirm": "RESET" }`. The handle survives. | **yes** |
 
 `reset` is a separate tool rather than a `mode` on `plan` on purpose: hosts grant permission per
 tool *name*, so this is what lets you auto-approve `plan` while `reset` still stops and asks.
 `plan` has no replace or wipe flag at all.
 
-Resources: `taskdag://me` (identity, never the token) and `ui://taskdag/board` (the MCP App).
+Resources: `taskdag://graph/<handle>` (every node and edge — the payload the tools leave out),
+`taskdag://me` (identity, never the token) and `ui://taskdag/board` (the MCP App).
+
+### What a result costs
+
+A tool result is not free and it is not paid once: it lands in the conversation and is re-sent with
+every turn that follows. So a result here is a **receipt** — which graph, how big, what is startable
+— and never the graph itself:
+
+```json
+{"graph":"g_9f1c…","title":"Platform migration","tasks":40,"edges":39,
+ "counts":{"todo":40},"ready":[{"key":"T1","title":"Task number 1"}]}
+```
+
+alongside a `resource_link` to `taskdag://graph/<handle>`. The App reads that resource directly, so
+the board draws the whole graph without the model paying for it, and the model reads it only when
+the shape of the graph is genuinely the question. A 40-task `plan` answers in ~420 characters
+instead of ~9,500. `test/budget.test.ts` holds that line: it fails if a result starts carrying the
+graph again.
+
+### `mermaid`: selectable, capped, and uncapped on purpose
+
+The diagram is the one result meant to be read as text, which makes it the one place a big graph can
+quietly cost thousands of tokens. So:
+
+- **Select instead of dumping.** `keys` (+ `depth`, `direction`) draws a neighbourhood; `status`
+  filters. Seeds always survive their own filter, and keys that match nothing select *nothing* —
+  never, quietly, everything.
+- **The output is capped** at 4,000 characters (8,000 if you ask). Over that, you get the
+  measurements rather than half a diagram, because truncated Mermaid is a syntax error, not a
+  smaller picture.
+- **The cap lifts only after it bites.** An overflow mints a single-use `override_token`, and that
+  token is the only way past the cap — for that graph, once. Asking for `max_chars: 500000` up
+  front is refused by the schema.
 
 **Graph rules.** Cycles are rejected by `link` and `plan`, with the cycle reported as task keys and
 nothing written. Self-edges are illegal, duplicate edges are idempotent. A cancelled dependency does
@@ -245,9 +293,11 @@ npm run check:board   # drives the compiled App in Chromium against a stand-in h
 ```
 
 `test/transport.test.ts` drives the real Worker entry point against that same fake, and asserts the
-session rules above — no minted session id, an incoming one ignored, `405` on GET and DELETE, one
-graph per token across unrelated requests, and a preflight that allows the `Mcp-Method` / `Mcp-Name`
-headers every modern request now has to carry. `test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
+session rules above — no minted session id, an incoming one ignored, `405` on GET and DELETE, and a
+preflight that allows the `Mcp-Method` / `Mcp-Name` headers every modern request now has to carry.
+`test/handles.test.ts` covers the handle itself (minting, defaulting, cross-token refusal, the
+resource behind it), `test/mermaid.test.ts` the selection and the cap, and `test/budget.test.ts`
+what all of it costs a conversation. `test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
 tests exercise the actual SQL rather than a second implementation of it. `scripts/check-board.mjs`
 loads the compiled bundle in a browser, completes the MCP Apps handshake, and asserts that the
 graph draws, that selection fetches detail through the host, and that **Done** leaves as a
@@ -256,8 +306,9 @@ graph draws, that selection fetches detail through the host, and that **Done** l
 
 ## Manual check list
 
-1. MCP Inspector against a minted `/<token>/mcp`: `tools/list` shows nine tools, `resources/list`
-   shows `ui://taskdag/board` with MIME `text/html;profile=mcp-app`.
+1. MCP Inspector against a minted `/<token>/mcp`: `tools/list` shows ten tools, `resources/list`
+   shows `ui://taskdag/board` with MIME `text/html;profile=mcp-app`, and reading
+   `taskdag://graph/<handle>` from a `plan` result returns that graph whole.
 2. Claude.ai (or the Cloudflare AI Playground): after `plan`, the board renders inline.
 3. Clicking **Done** on the board changes D1 — ask *"what's ready?"* afterwards and the queue has
    moved.
@@ -265,8 +316,8 @@ graph draws, that selection fetches detail through the host, and that **Done** l
 ## Layout
 
 ```
-src/graph.ts    pure rules: cycles, ready set, keys, mermaid   (unit tested)
-src/db.ts       D1, partitioned by token; merge, patch, reset  (unit tested)
+src/graph.ts    pure rules: cycles, ready set, keys, selection, mermaid (unit tested)
+src/db.ts       D1, owned by token and addressed by handle; merge, patch, reset (unit tested)
 src/tools.ts    the MCP tools and resources
 src/server.ts   one McpServer per request, closed over the token
 src/index.ts    routing: /, /:token/mcp, /health

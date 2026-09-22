@@ -87,6 +87,7 @@ function call(
         // `tools/call` must repeat the tool name in a header too; the
         // revision requires header and body to agree.
         ...(typeof params.name === 'string' ? { 'mcp-name': params.name } : {}),
+        ...(typeof params.uri === 'string' ? { 'mcp-name': params.uri } : {}),
         ...extraHeaders,
       },
       body: JSON.stringify(modernBody(1, method, params)),
@@ -115,13 +116,26 @@ function toolNames(listResult: Record<string, unknown>): string[] {
   return (listResult.tools as { name: string }[]).map((t) => t.name).sort();
 }
 
-/** The graph `show` reports, parsed out of its text content. */
-async function graphKeys(e: { DB: D1Database }, token: string = TOKEN): Promise<string[]> {
-  const res = await call(e, 'tools/call', { name: 'show', arguments: { format: 'json' } }, {}, token);
+/** The JSON body of a tool receipt. */
+async function receiptOf(res: Response): Promise<Record<string, unknown>> {
   const shown = await result(res);
   const text = (shown.content as { type: string; text: string }[]).find((c) => c.type === 'text');
-  const graph = JSON.parse(text!.text) as { graph: { nodes: { key: string }[] } };
-  return graph.graph.nodes.map((n) => n.key).sort();
+  return JSON.parse(text!.text) as Record<string, unknown>;
+}
+
+/**
+ * The task keys in a token's current graph, fetched the way the App does
+ * it: the receipt names a handle, and the handle names a resource. Nothing
+ * about the connection is involved.
+ */
+async function graphKeys(e: { DB: D1Database }, token: string = TOKEN): Promise<string[]> {
+  const receipt = await receiptOf(await call(e, 'tools/call', { name: 'show', arguments: {} }, {}, token));
+  if (receipt.graph === null) return [];
+  const uri = `taskdag://graph/${receipt.graph as string}`;
+  const read = await result(await call(e, 'resources/read', { uri }, { 'mcp-name': uri }, token));
+  const contents = (read.contents as { text: string }[])[0];
+  const graph = JSON.parse(contents.text) as { nodes: { key: string }[] };
+  return graph.nodes.map((n) => n.key).sort();
 }
 
 describe('sessions are not part of this transport', () => {

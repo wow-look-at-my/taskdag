@@ -19,30 +19,40 @@ const BUNDLE = fileURLToPath(new URL('../dist/ui/board.html', import.meta.url));
 const HEADED = process.argv.includes('--headed');
 const SHOT = process.argv.includes('--shot') ? process.argv[process.argv.indexOf('--shot') + 1] : null;
 
-/** The fixture the host hands the board, in the exact shape `plan` returns. */
-const BOARD = {
+/**
+ * The fixtures, in the two halves the real server now uses: a receipt the
+ * tool result carries, and a graph the board has to go and read.
+ */
+const HANDLE = 'g_0123456789abcdef';
+
+const GRAPH = {
+  graph: HANDLE,
   title: 'Site relaunch',
-  ready: [
-    { key: 'brand', title: 'Brand refresh', priority: 0 },
-    { key: 'cms', title: 'CMS migration', priority: 0 },
+  nodes: [
+    { key: 'brand', title: 'Brand refresh', status: 'todo', priority: 0 },
+    { key: 'cms', title: 'CMS migration', status: 'todo', priority: 0 },
+    { key: 'homepage', title: 'Homepage build', status: 'todo', priority: 0 },
+    { key: 'prod', title: 'Production cutover', status: 'todo', priority: 0 },
+    { key: 'staging', title: 'Staging deploy', status: 'todo', priority: 0 },
   ],
-  graph: {
-    title: 'Site relaunch',
-    counts: { todo: 5 },
-    nodes: [
-      { key: 'brand', title: 'Brand refresh', status: 'todo', priority: 0 },
-      { key: 'cms', title: 'CMS migration', status: 'todo', priority: 0 },
-      { key: 'homepage', title: 'Homepage build', status: 'todo', priority: 0 },
-      { key: 'prod', title: 'Production cutover', status: 'todo', priority: 0 },
-      { key: 'staging', title: 'Staging deploy', status: 'todo', priority: 0 },
-    ],
-    edges: [
-      { from: 'homepage', to: 'brand' },
-      { from: 'staging', to: 'homepage' },
-      { from: 'staging', to: 'cms' },
-      { from: 'prod', to: 'staging' },
-    ],
-  },
+  edges: [
+    { from: 'homepage', to: 'brand' },
+    { from: 'staging', to: 'homepage' },
+    { from: 'staging', to: 'cms' },
+    { from: 'prod', to: 'staging' },
+  ],
+};
+
+const RECEIPT = {
+  graph: HANDLE,
+  title: 'Site relaunch',
+  tasks: GRAPH.nodes.length,
+  edges: GRAPH.edges.length,
+  counts: { todo: 5 },
+  ready: [
+    { key: 'brand', title: 'Brand refresh' },
+    { key: 'cms', title: 'CMS migration' },
+  ],
 };
 
 const HOST_PAGE = `<!doctype html>
@@ -52,13 +62,17 @@ const HOST_PAGE = `<!doctype html>
 <script type="module">
   // A minimal MCP Apps host: ui/initialize, then the tool result, then
   // whatever tools the View calls get proxied — here, answered from fixtures.
-  const BOARD = ${JSON.stringify(BOARD)};
+  const HANDLE = ${JSON.stringify(HANDLE)};
+  const GRAPH = ${JSON.stringify(GRAPH)};
+  const RECEIPT = ${JSON.stringify(RECEIPT)};
+  const receipt = () => ({ content: [{ type: 'text', text: JSON.stringify(RECEIPT) }] });
   const PARAMS = new URLSearchParams(location.search);
   // ?theme=  (empty) reproduces a host that reports no theme at all.
   const THEME = PARAMS.has('theme') ? PARAMS.get('theme') : 'light';
   const FAIL = PARAMS.has('fail');
   const frame = document.getElementById('view');
   window.__calls = [];
+  window.__reads = [];
 
   const send = (msg) => frame.contentWindow.postMessage(msg, '*');
   const result = (id, value) => send({ jsonrpc: '2.0', id, result: value });
@@ -83,8 +97,19 @@ const HOST_PAGE = `<!doctype html>
     if (msg.method === 'ui/notifications/initialized') {
       const params = FAIL
         ? { isError: true, content: [{ type: 'text', text: 'D1_ERROR: no such table: graphs: SQLITE_ERROR' }] }
-        : { content: [{ type: 'text', text: JSON.stringify(BOARD) }] };
+        : receipt();
       send({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params });
+      return;
+    }
+    if (msg.method === 'resources/read') {
+      // The half that used to ride in the tool result. The board asks for
+      // it by handle, exactly as it would from the deployed Worker.
+      window.__reads.push(msg.params.uri);
+      if (FAIL) {
+        result(msg.id, { contents: [] });
+        return;
+      }
+      result(msg.id, { contents: [{ uri: msg.params.uri, mimeType: 'application/json', text: JSON.stringify(GRAPH) }] });
       return;
     }
     if (msg.method === 'tools/call') {
@@ -96,12 +121,12 @@ const HOST_PAGE = `<!doctype html>
       }
       if (name === 'get_task') {
         const key = msg.params.arguments.key;
-        const node = BOARD.graph.nodes.find((n) => n.key === key);
+        const node = GRAPH.nodes.find((n) => n.key === key);
         result(msg.id, {
           content: [{ type: 'text', text: JSON.stringify({
             task: { key, title: node.title, detail: 'Fixture detail for ' + key, status: node.status, priority: 0, tags: [] },
-            depends_on: BOARD.graph.edges.filter((e) => e.from === key).map((e) => e.to),
-            dependents: BOARD.graph.edges.filter((e) => e.to === key).map((e) => e.from),
+            depends_on: GRAPH.edges.filter((e) => e.from === key).map((e) => e.to),
+            dependents: GRAPH.edges.filter((e) => e.to === key).map((e) => e.from),
             blocked_by: [],
             ready: true,
           }) }],
@@ -112,12 +137,12 @@ const HOST_PAGE = `<!doctype html>
         // Stateful on purpose: a host that forgets the write cannot catch a
         // board that re-draws from a stale result.
         const key = msg.params.arguments.key;
-        BOARD.graph.nodes.find((n) => n.key === key).status = msg.params.arguments.status;
-        BOARD.ready = BOARD.ready.filter((r) => r.key !== key);
-        result(msg.id, { content: [{ type: 'text', text: JSON.stringify(BOARD) }] });
+        GRAPH.nodes.find((n) => n.key === key).status = msg.params.arguments.status;
+        RECEIPT.ready = RECEIPT.ready.filter((r) => r.key !== key);
+        result(msg.id, receipt());
         return;
       }
-      result(msg.id, { content: [{ type: 'text', text: JSON.stringify(BOARD) }] });
+      result(msg.id, receipt());
       return;
     }
     if (msg.id !== undefined && msg.method) result(msg.id, {});
@@ -169,6 +194,12 @@ check('ready queue is listed', (await view.locator('#ready').textContent()).incl
 
 check('no task actions until something is selected', await view.locator('#actions').isHidden());
 
+// The graph is not in the tool result any more: the board must have gone
+// and read it by handle. This is the check that would have caught shipping
+// the receipt without the fetch behind it.
+const reads = await page.evaluate(() => window.__reads);
+check('board read the graph resource by handle', reads.includes(`taskdag://graph/${HANDLE}`), JSON.stringify(reads));
+
 const info = await view.locator('#graph').evaluate((el) => el.info);
 check('all five nodes laid out', info.nodeCount === 5, JSON.stringify(info));
 check('all four edges drawn', info.edgeCount === 4, JSON.stringify(info));
@@ -199,7 +230,14 @@ await view.locator('#selected .pill').filter({ hasText: 'done' }).waitFor({ time
 const calls = await page.evaluate(() => window.__calls);
 const update = calls.find((c) => c.name === 'update_task');
 check('Done called update_task through the host', update?.arguments.key === 'homepage' && update?.arguments.status === 'done', JSON.stringify(calls));
-check('the board re-drew from the tool result', (await view.locator('#done').textContent()) === 'Reopen');
+// A card outlives its turn, and nothing about the connection says which
+// graph it was drawing. So every call has to name one -- except the very
+// first, made by a cold-mounted card that has not been told a handle yet
+// and is asking the server for its most recent graph.
+const [coldMount, ...afterReceipt] = calls;
+check('the cold-mount refresh asks without a handle', coldMount.name === 'show' && coldMount.arguments.graph === undefined, JSON.stringify(coldMount));
+check('every later tool call names the graph handle', afterReceipt.every((c) => c.arguments.graph === HANDLE), JSON.stringify(afterReceipt));
+check('the board re-drew after the write', (await view.locator('#done').textContent()) === 'Reopen');
 
 await view.locator('#refresh').click();
 await page.waitForFunction(() => window.__calls.some((c) => c.name === 'show'), null, { timeout: 5000 });

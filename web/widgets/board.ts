@@ -35,9 +35,33 @@ interface BoardNode {
   tags?: string[];
 }
 
+/**
+ * What a tool call now returns: a receipt, not a graph.
+ *
+ * The nodes and edges deliberately are not in here. They cost the model
+ * thousands of tokens per call and it usually did not need them, so they
+ * moved behind `taskdag://graph/<handle>` — which this board reads itself,
+ * over the same host bridge it already uses for tool calls.
+ */
+interface Receipt {
+  graph: string | null;
+  title?: string;
+  tasks?: number;
+  ready?: { key: string; title: string }[];
+}
+
+/** The resource behind a handle: the whole graph. */
+interface GraphData {
+  graph: string;
+  title: string;
+  nodes: BoardNode[];
+  edges: { from: string; to: string }[];
+}
+
+/** What `render` draws: a receipt joined to the graph it points at. */
 interface BoardPayload {
   title?: string;
-  ready?: { key: string; title: string; priority: number }[];
+  ready?: { key: string; title: string }[];
   graph?: { title?: string; nodes: BoardNode[]; edges: { from: string; to: string }[] };
 }
 
@@ -105,6 +129,8 @@ const refreshBtn = document.getElementById('refresh') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
 let board: BoardPayload = {};
+/** The graph every call in this card is about. Comes from the receipt. */
+let handle: string | null = null;
 let selectedKey: string | null = null;
 let busy = false;
 
@@ -219,12 +245,41 @@ function parseResult<T>(result: ToolResult): T | null {
 }
 
 async function callTool<T>(name: string, args: Record<string, unknown>): Promise<T | null> {
-  const result = (await app.callServerTool({ name, arguments: args })) as ToolResult;
+  // Every call names the graph explicitly. The card outlives the turn that
+  // created it, and nothing about the connection says which graph it was
+  // looking at — that is exactly the state the handle exists to carry.
+  const withGraph = handle === null ? args : { graph: handle, ...args };
+  const result = (await app.callServerTool({ name, arguments: withGraph })) as ToolResult;
   // A failed tool comes back as a RESULT with isError set, not a rejection.
   // Treating that as "no data" is how a broken server renders as a blank
   // white card instead of saying what went wrong.
   if (result.isError) throw new Error(textOf(result) || `${name} failed.`);
   return parseResult<T>(result);
+}
+
+/** Reads the graph a receipt points at. */
+async function readGraph(id: string): Promise<GraphData> {
+  const res = (await app.readServerResource({ uri: `taskdag://graph/${id}` })) as {
+    contents?: { text?: string }[];
+  };
+  const text = res.contents?.find((c) => typeof c.text === 'string')?.text;
+  if (!text) throw new Error('That graph resource came back empty.');
+  return JSON.parse(text) as GraphData;
+}
+
+/**
+ * Receipt in, board on screen. The two-step — receipt, then resource — is
+ * the whole point of the design, so it lives in one function that every
+ * entry point goes through.
+ */
+async function applyReceipt(receipt: Receipt): Promise<void> {
+  handle = receipt.graph;
+  if (handle === null) {
+    render({ title: receipt.title, ready: [], graph: { nodes: [], edges: [] } });
+    return;
+  }
+  const data = await readGraph(handle);
+  render({ title: receipt.title ?? data.title, ready: receipt.ready ?? [], graph: { nodes: data.nodes, edges: data.edges } });
 }
 
 async function loadDetail(key: string): Promise<void> {
@@ -239,8 +294,8 @@ async function loadDetail(key: string): Promise<void> {
 async function update(key: string, status: string): Promise<void> {
   setBusy(true, `Setting ${key} to ${status.replace('_', ' ')}…`);
   try {
-    const payload = await callTool<BoardPayload>('update_task', { key, status });
-    if (payload?.graph) render(payload);
+    const receipt = await callTool<Receipt>('update_task', { key, status });
+    if (receipt) await applyReceipt(receipt);
     setBusy(false, '');
     if (selectedKey) void loadDetail(selectedKey);
   } catch (err) {
@@ -251,8 +306,8 @@ async function update(key: string, status: string): Promise<void> {
 async function refresh(): Promise<void> {
   setBusy(true, 'Refreshing…');
   try {
-    const payload = await callTool<BoardPayload>('show', { format: 'json' });
-    if (payload?.graph) render(payload);
+    const receipt = await callTool<Receipt>('show', {});
+    if (receipt) await applyReceipt(receipt);
     setBusy(false, '');
   } catch (err) {
     setBusy(false, err instanceof Error ? err.message : 'Refresh failed.', true);
@@ -311,8 +366,13 @@ app.addEventListener('toolresult', (params) => {
     setBusy(false, textOf(result) || 'That call failed.', true);
     return;
   }
-  const payload = parseResult<BoardPayload>(result);
-  if (payload?.graph) render(payload);
+  const receipt = parseResult<Receipt>(result);
+  if (!receipt) return;
+  void applyReceipt(receipt).catch((err: unknown) => {
+    // The receipt arrived but its graph did not. Saying which half failed
+    // beats a blank card that looks like a dead server.
+    setBusy(false, err instanceof Error ? err.message : 'Could not load that graph.', true);
+  });
 });
 
 app.addEventListener('hostcontextchanged', (context) => applyTheme(context));
@@ -322,5 +382,5 @@ void (async () => {
   applyTheme(app.getHostContext());
   // A board mounted without a result to draw (a re-opened conversation, a
   // host that does not replay) asks for one rather than sitting empty.
-  if (!board.graph) await refresh();
+  if (!board.graph?.nodes.length) await refresh();
 })();

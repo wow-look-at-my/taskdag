@@ -242,3 +242,86 @@ function mermaidId(key: string): string {
 function escapeMermaid(s: string): string {
   return s.replace(/"/g, "'").replace(/[\r\n]+/g, ' ');
 }
+
+// -- Selection ------------------------------------------------------------------------
+
+/**
+ * Which part of a graph to render or return.
+ *
+ * WHY THIS EXISTS. A whole dependency graph is the wrong default answer to
+ * almost every question asked about one. "What is blocking the launch?" is a
+ * neighbourhood; "what is left?" is a status filter. Selecting server-side
+ * is what keeps a 200-node graph out of the conversation when three nodes
+ * were the question.
+ */
+export interface Selection {
+  /** Seed keys. Omitted (or empty) means every task, subject to `status`. */
+  keys?: string[];
+  /** How many dependency hops to follow out from the seeds. Default 1. */
+  depth?: number;
+  /** Which way to walk: prerequisites, dependents, or both. Default 'both'. */
+  direction?: 'up' | 'down' | 'both';
+  /** Keep only these statuses. Omitted means every status. */
+  status?: TaskStatus[];
+}
+
+/**
+ * The selected subgraph: the tasks that survive, and the edges with both
+ * ends still standing.
+ *
+ * Seeds always survive a `status` filter — asking about T7 and getting an
+ * empty answer because T7 is done would be a worse lie than showing it.
+ * The filter applies to what the walk *reaches*.
+ */
+export function selectSubgraph(
+  tasks: readonly Task[],
+  edges: readonly Edge[],
+  selection: Selection = {},
+): { tasks: Task[]; edges: Edge[] } {
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  const statuses = selection.status && selection.status.length > 0 ? new Set<TaskStatus>(selection.status) : null;
+  const asked = selection.keys ?? [];
+  const seeds = asked.filter((key) => byKey.has(key));
+
+  // Asking about keys that do not exist selects NOTHING, never everything.
+  // The caller misspelled a key or is looking at a stale plan; answering
+  // with the entire graph would be both wrong and the most expensive
+  // possible way to be wrong.
+  if (asked.length > 0 && seeds.length === 0) return { tasks: [], edges: [] };
+
+  let keep: Set<string>;
+  if (seeds.length === 0) {
+    keep = new Set(tasks.filter((t) => !statuses || statuses.has(t.status)).map((t) => t.key));
+  } else {
+    const depth = Math.max(0, selection.depth ?? 1);
+    const direction = selection.direction ?? 'both';
+    keep = new Set(seeds);
+    let frontier = seeds;
+    for (let hop = 0; hop < depth && frontier.length > 0; hop += 1) {
+      const next: string[] = [];
+      for (const key of frontier) {
+        const reached = [
+          ...(direction === 'up' || direction === 'both' ? dependenciesOf(key, edges) : []),
+          ...(direction === 'down' || direction === 'both' ? dependentsOf(key, edges) : []),
+        ];
+        for (const found of reached) {
+          const task = byKey.get(found);
+          if (!task || keep.has(found)) continue;
+          if (statuses && !statuses.has(task.status)) continue;
+          keep.add(found);
+          next.push(found);
+        }
+      }
+      frontier = next;
+    }
+  }
+
+  const keptTasks = tasks.filter((t) => keep.has(t.key));
+  const keptEdges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
+  return { tasks: keptTasks, edges: keptEdges };
+}
+
+/** True when a selection asks for less than everything. */
+export function isNarrowed(selection: Selection = {}): boolean {
+  return (selection.keys?.length ?? 0) > 0 || (selection.status?.length ?? 0) > 0;
+}

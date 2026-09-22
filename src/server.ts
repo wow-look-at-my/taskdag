@@ -16,11 +16,17 @@ import type { ToolContext } from './tools.ts';
 
 const SERVER_INFO = { name: 'taskdag', version: '0.1.0' } as const;
 
+/**
+ * Sent once per conversation, so it buys clarity cheaply — and it is the
+ * only place that can teach the handle convention before the first call.
+ */
 const INSTRUCTIONS = [
-  'TaskDAG holds ONE working graph of tasks and dependencies for this connection.',
+  'TaskDAG stores graphs of tasks and dependencies.',
+  'Every result carries a `graph` handle: pass it back on later calls, or omit it for the most recent one.',
+  'Results are summaries; the nodes and edges live at taskdag://graph/<handle>, and `mermaid` draws them.',
   'An edge { from, to } reads "from depends on to": to must be done before from can start.',
   'plan merges — it never deletes, so a new plan never needs a wipe first.',
-  'reset is the only tool that clears the graph and it needs { "confirm": "RESET" }.',
+  'reset is the only tool that clears a graph and it needs { "confirm": "RESET" }.',
 ].join(' ');
 
 export function createServer(ctx: ToolContext): McpServer {
