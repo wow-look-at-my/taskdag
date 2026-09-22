@@ -1,0 +1,97 @@
+{
+  "$comment": "The read half of the surface. Registered verbatim by src/tools.ts through fromJsonSchema, so what a client sees is this file. Branch requirements (task needs `key`) are stated in the `what` description and enforced in the handler, which can name the missing field; they are deliberately NOT allOf/if/then, which cost bytes in every conversation to say it less well.",
+  "name": "read",
+  "title": "Read a graph",
+  "description": "Read a task graph: the board, the ready queue, one task in full, the graphs on this connector, or a Mermaid diagram. Pick with `what`. Results are summaries \u2014 the whole graph lives at taskdag://graph/<handle>.",
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
+  "inputSchema": {
+    "type": "object",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "required": [
+      "what"
+    ],
+    "properties": {
+      "what": {
+        "type": "string",
+        "enum": [
+          "board",
+          "ready",
+          "task",
+          "graphs",
+          "mermaid"
+        ],
+        "description": "board: counts + ready queue, and draws the card. ready: startable tasks only. task: one task whole \u2014 detail, dependencies, what blocks it (needs `key`). graphs: every graph on this connector. mermaid: a diagram \u2014 narrow it with keys/depth/direction/status, it is the one answer that costs real tokens."
+      },
+      "graph": {
+        "type": "string",
+        "pattern": "^g_[0-9a-f]{16}$",
+        "description": "Graph handle from an earlier result. Omit for the most recent."
+      },
+      "key": {
+        "type": "string",
+        "description": "Which task. Required for what=task."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 5,
+        "description": "How many ready tasks to name; the rest are counted."
+      },
+      "keys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 50,
+        "description": "Draw only around these tasks. Omit for the whole graph; keys that match nothing draw nothing."
+      },
+      "depth": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10,
+        "default": 1,
+        "description": "Hops to follow out from `keys`."
+      },
+      "direction": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "both"
+        ],
+        "default": "both",
+        "description": "up = prerequisites, down = dependents."
+      },
+      "status": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "in_progress",
+            "done",
+            "blocked",
+            "cancelled"
+          ]
+        },
+        "maxItems": 5,
+        "description": "Keep only these statuses. Seeds survive regardless."
+      },
+      "max_chars": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The diagram budget, default 4000. Raise or lower it freely; the default exists so a big graph cannot land whole by accident, not to stop you asking."
+      },
+      "override_token": {
+        "type": "string",
+        "description": "From a previous overflow: renders that graph whole without needing to know its size. Single use."
+      }
+    }
+  }
+}

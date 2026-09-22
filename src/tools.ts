@@ -23,7 +23,9 @@ import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE } from '@model
 import { ResourceTemplate, fromJsonSchema } from '@modelcontextprotocol/server';
 import type { JsonSchemaType, McpServer } from '@modelcontextprotocol/server';
 
-import TOOL_SCHEMAS from './tool-schemas.json';
+import READ_SCHEMA from './schemas/read.json';
+import RESET_SCHEMA from './schemas/reset.json';
+import WRITE_SCHEMA from './schemas/write.json';
 
 import { blockedBy, compareKeys, dependenciesOf, dependentsOf, isNarrowed, readyKeys, selectSubgraph, toMermaid } from './graph.ts';
 import type { Edge, Selection, Task, TaskStatus } from './graph.ts';
@@ -179,7 +181,8 @@ async function guard<T>(run: () => Promise<T>): Promise<T | ReturnType<typeof fa
  * `then` makes it required for one value of the discriminator, which a type
  * cannot express and a host is not obliged to enforce, so the handlers check.
  */
-/** One entry of `src/tool-schemas.json`. */
+/** One file in `src/schemas/`. The cast is because a JSON import types
+ * enums as `string`, which is not assignable to `JsonSchemaType`. */
 interface ToolSchema {
   name: string;
   title: string;
@@ -234,24 +237,16 @@ interface WriteArgs {
  * not). There is no `delete_graph`: reset empties a graph and an empty graph
  * is not listed, so emptying already IS deleting.
  *
- * WHY THE SCHEMAS ARE JSON. `if`/`then` says "key is required when
- * what=task" in the schema rather than in prose a model has to infer. zod
- * cannot express that, so the JSON is the source and `fromJsonSchema` hands
- * it to the SDK untouched — what a client sees is that file. Hosts are not
- * obliged to enforce `if`/`then`, so every branch is re-checked below and
- * answers with a message that says what was missing.
+ * WHY THE SCHEMAS ARE JSON, AND IN THEIR OWN FILES. `src/schemas/*.json`
+ * is handed to `fromJsonSchema` untouched, so what a client sees is those
+ * files — one per tool, each carrying the argument for its own existence.
+ * They state branch requirements in the discriminator's description rather
+ * than in `allOf`/`if`/`then`: a conditional costs bytes in every
+ * conversation to restate what the handler says better, naming the field
+ * that was missing. So every branch is re-checked below.
  */
 export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   registerResources(server, ctx);
-
-  // TypeScript infers a union of the three literal schema shapes from the
-  // JSON import, which is not the same thing as "a JSON Schema". The file
-  // IS the contract, so it is read as one.
-  const schemaFor = (name: string) => {
-    const tool = (TOOL_SCHEMAS.tools as unknown as ToolSchema[]).find((t) => t.name === name);
-    if (!tool) throw new Error(`No schema for tool "${name}"`);
-    return tool;
-  };
 
   /** Reads the graph a call is about, without creating one. */
   const read = async (handle?: string): Promise<GraphState> => {
@@ -273,7 +268,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   };
 
   // -- read ---------------------------------------------------------------------------
-  const readTool = schemaFor('read');
+  const readTool = READ_SCHEMA as ToolSchema;
   registerAppTool(
     server,
     'read',
@@ -319,7 +314,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   );
 
   // -- write --------------------------------------------------------------------------
-  const writeTool = schemaFor('write');
+  const writeTool = WRITE_SCHEMA as ToolSchema;
   registerAppTool(
     server,
     'write',
@@ -366,7 +361,7 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
   );
 
   // -- reset --------------------------------------------------------------------------
-  const resetTool = schemaFor('reset');
+  const resetTool = RESET_SCHEMA as ToolSchema;
   registerAppTool(
     server,
     'reset',

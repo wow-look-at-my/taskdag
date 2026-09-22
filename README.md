@@ -234,8 +234,9 @@ The handle keeps working, and writing to it puts the graph back. Resolution is d
 filtered the same way: clear a graph and add to it without naming one, and you land back in the one
 you just cleared rather than silently in an older one.
 
-**The schemas are JSON, not zod.** `src/tool-schemas.json` is registered verbatim through
-`fromJsonSchema`, so what a client sees is that file.
+**The schemas are JSON, not zod.** `src/schemas/read.json`, `write.json` and `reset.json` are
+registered verbatim through `fromJsonSchema`, so what a client sees is those files — one per tool,
+each carrying the argument for its own existence in a `$comment`.
 
 It deliberately carries **no `allOf`/`if`/`then`**. Saying "`key` is required when `what="task"`"
 that way cost 566 bytes of every conversation to restate something the discriminator's description
@@ -398,6 +399,7 @@ display mode with the host. On a machine whose Chromium lives outside `node_modu
 src/graph.ts    pure rules: cycles, ready set, keys, selection, mermaid (unit tested)
 src/db.ts       D1, owned by token and addressed by handle; merge, patch, reset (unit tested)
 src/tools.ts    the MCP tools and resources
+src/schemas/    one JSON Schema per tool, registered verbatim
 src/server.ts   one McpServer per request, closed over the token
 src/index.ts    routing: /, /:token/mcp, /health
 src/token.ts    what counts as an owner token

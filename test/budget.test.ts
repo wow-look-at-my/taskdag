@@ -38,6 +38,14 @@ describe('context budget', () => {
     // hosts grant permission per tool name.
     expect(tools.map((t) => t.name).sort()).toEqual(['read', 'reset', 'write']);
     expect(bytes).toBeLessThan(8_000);
+
+    // A tool with no description is a tool a model has to guess at. Two of
+    // these shipped that way: the JSON carried `title` and the enum's
+    // description, and nothing filled the field the client actually shows.
+    for (const tool of tools) {
+      expect(tool.description, tool.name).toBeTruthy();
+      expect(tool.description.length, tool.name).toBeGreaterThan(40);
+    }
   });
 
   it('answers a 40-task plan with a receipt, not a graph', async () => {
