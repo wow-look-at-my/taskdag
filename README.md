@@ -218,6 +218,7 @@ calls is a list nobody can read — but its handle keeps working, and writing to
 Resolution is deliberately not filtered the same way: clear a graph and add to it without naming
 it, and you land back in the one you just cleared rather than silently in an older one.
 
+
 `reset` is a separate tool rather than a `mode` on `plan` on purpose: hosts grant permission per
 tool *name*, so this is what lets you auto-approve `plan` while `reset` still stops and asks.
 `plan` has no replace or wipe flag at all.
@@ -321,6 +322,7 @@ graph draws, that selection fetches detail through the host, and that **Done** l
 ## Manual check list
 
 1. MCP Inspector against a minted `/<token>/mcp`: `tools/list` shows eleven tools, `resources/list`
+
    shows `ui://taskdag/board` with MIME `text/html;profile=mcp-app`, and reading
    `taskdag://graph/<handle>` from a `plan` result returns that graph whole.
 2. Claude.ai (or the Cloudflare AI Playground): after `plan`, the board renders inline.
