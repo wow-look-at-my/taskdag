@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["@cloudflare/workers-types", "node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "web/**/*.ts", "test/**/*.ts", "vite.config.ts", "third_party/js-snippets/src/ui/*.ts"],
+  "exclude": ["node_modules", "dist", "third_party"]
+}

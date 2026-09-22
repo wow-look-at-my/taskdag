@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "taskdag",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  // The MCP SDK reaches for a few node builtins (crypto, buffer shims).
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Runs before wrangler bundles, on a laptop and in a Cloudflare Workers
+  // Build alike. It is a no-op when node_modules is already there; on a
+  // fresh CI clone it installs the runtime dependencies, which is what lets
+  // the deploy command be a bare `wrangler versions upload` with nothing
+  // configured in the dashboard. The MCP App bundle is committed, so
+  // nothing here needs to build the UI.
+  "build": { "command": "node scripts/ensure-deps.mjs" },
+
+  // The landing page and the compiled MCP App bundle are imported as
+  // strings, which is what makes the deployed Worker self-contained: no
+  // asset binding, no CDN, no runtime fetch of the viewer.
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": false }],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "taskdag-db",
+      "database_id": "926178ab-2566-4ec8-81a5-84da794ddca7",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

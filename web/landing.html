@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>TaskDAG</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #16191f;
+        --muted: #5e6674;
+        --line: #d9dde5;
+        --accent: #2563eb;
+        --code-bg: #f4f6fa;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0e1117;
+          --fg: #e8ecf4;
+          --muted: #9aa3b2;
+          --line: #262c38;
+          --accent: #6aa6ff;
+          --code-bg: #171c25;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0 auto;
+        padding: 40px 20px 72px;
+        max-width: 680px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.02em; }
+      h2 { font-size: 15px; margin: 32px 0 8px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+      p { margin: 0 0 12px; }
+      .lede { color: var(--muted); margin-bottom: 28px; }
+      .url-box {
+        display: flex; gap: 8px; align-items: stretch; margin: 12px 0 8px;
+      }
+      code, .url {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        font-size: 13px;
+      }
+      .url {
+        flex: 1; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
+        background: var(--code-bg); color: var(--fg); word-break: break-all; user-select: all;
+      }
+      button {
+        font: inherit; font-size: 14px; padding: 0 16px; cursor: pointer;
+        border: 1px solid var(--line); border-radius: 8px; background: var(--code-bg); color: var(--fg);
+      }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:hover { filter: brightness(1.06); }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+      .warn {
+        border-left: 3px solid var(--accent); padding: 10px 14px; margin: 20px 0;
+        background: var(--code-bg); border-radius: 0 8px 8px 0;
+      }
+      pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; margin: 0 0 12px; }
+      ol { padding-left: 20px; margin: 0 0 12px; }
+      li { margin-bottom: 6px; }
+      noscript { display: block; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <h1>TaskDAG</h1>
+    <p class="lede">A dependency graph of tasks, built and walked from a chat. Connect it to Claude and it draws the board inline.</p>
+
+    <h2>Your connector URL</h2>
+    <div class="url-box">
+      <div class="url" id="url">generating…</div>
+    </div>
+    <div class="row">
+      <button class="primary" id="copy" type="button">Copy</button>
+      <button id="regen" type="button">Mint a new one</button>
+    </div>
+
+    <div class="warn">
+      <strong>This URL is the password.</strong> Anyone who has it can read and write that graph.
+      Bookmark it; don't post it. Reload this page for a brand-new, empty graph — the old one keeps
+      living at its own URL.
+    </div>
+
+    <h2>Claude.ai</h2>
+    <ol>
+      <li>Settings → Connectors → <em>Add custom connector</em>.</li>
+      <li>Paste the URL above. Authentication: <strong>no sign-in</strong>.</li>
+      <li>Ask: <em>"Plan a DAG for a site relaunch: brand, homepage, cms, staging, prod. homepage depends on brand; staging depends on homepage and cms; prod depends on staging. Show the board."</em></li>
+    </ol>
+
+    <h2>Claude Code</h2>
+    <pre><code id="cli">claude mcp add --transport http taskdag &lt;url&gt;</code></pre>
+
+    <noscript>This page mints your token in the browser, so it needs JavaScript. The server never generates one.</noscript>
+
+    <script>
+      // THE SERVER NEVER MINTS A TOKEN. 32 bytes of browser entropy,
+      // base64url, straight into a URL that is never sent anywhere until you
+      // paste it into a client yourself.
+      function mint() {
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        let binary = '';
+        for (const b of bytes) binary += String.fromCharCode(b);
+        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      }
+
+      const urlEl = document.getElementById('url');
+      const cliEl = document.getElementById('cli');
+      const copyEl = document.getElementById('copy');
+
+      function show() {
+        const url = `${location.origin}/${mint()}/mcp`;
+        urlEl.textContent = url;
+        cliEl.textContent = `claude mcp add --transport http taskdag ${url}`;
+      }
+
+      copyEl.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(urlEl.textContent);
+          copyEl.textContent = 'Copied';
+          setTimeout(() => (copyEl.textContent = 'Copy'), 1600);
+        } catch {
+          copyEl.textContent = 'Select it and copy';
+        }
+      });
+      document.getElementById('regen').addEventListener('click', show);
+      show();
+    </script>
+  </body>
+</html>

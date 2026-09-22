@@ -1,0 +1,33 @@
+{
+  "name": "taskdag",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:ui": "vite build",
+    "build": "npm run build:ui",
+    "dev": "npm run build:ui && wrangler dev",
+    "deploy": "npm run build:ui && wrangler deploy",
+    "test": "vitest run",
+    "check:board": "npm run build:ui && node scripts/check-board.mjs",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply taskdag-db --local",
+    "migrate:remote": "wrangler d1 migrations apply taskdag-db --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260922.1",
+    "@types/node": "^26.6.2",
+    "playwright": "^1.63.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^5.0.1",
+    "wrangler": "^4.136.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "agents": "^0.24.0",
+    "zod": "^4.6.5"
+  }
+}

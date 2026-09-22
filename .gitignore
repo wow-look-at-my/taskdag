@@ -1,0 +1,12 @@
+node_modules/
+.wrangler/
+.dev.vars
+*.log
+
+# The compiled MCP App is COMMITTED, on purpose: js-snippets is private, so
+# a Cloudflare Git-integration build cannot check out the submodule to
+# rebuild it. `npm run build:ui` regenerates it; commit the result.
+dist/*
+!dist/ui/
+dist/ui/*
+!dist/ui/board.html
