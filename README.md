@@ -296,8 +296,10 @@ npm run check:board   # drives the compiled App in Chromium against a stand-in h
 session rules above — no minted session id, an incoming one ignored, `405` on GET and DELETE, and a
 preflight that allows the `Mcp-Method` / `Mcp-Name` headers every modern request now has to carry.
 `test/handles.test.ts` covers the handle itself (minting, defaulting, cross-token refusal, the
-resource behind it), `test/mermaid.test.ts` the selection and the cap, and `test/budget.test.ts`
-what all of it costs a conversation. `test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
+resource behind it), `test/mermaid.test.ts` the selection and the cap, `test/budget.test.ts` what
+all of it costs a conversation, and `test/migration.test.ts` starts from a genuine pre-handle
+database — 0001's tables with rows in them — to prove the backfill gives an existing graph a handle
+without losing or duplicating it, however many times a cold start replays it. `test/fake-d1.ts` runs the real migration and the real statements on `node:sqlite`, so the merge
 tests exercise the actual SQL rather than a second implementation of it. `scripts/check-board.mjs`
 loads the compiled bundle in a browser, completes the MCP Apps handshake, and asserts that the
 graph draws, that selection fetches detail through the host, and that **Done** leaves as a
