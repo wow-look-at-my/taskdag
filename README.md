@@ -63,12 +63,19 @@ node/edge shape, follows selection, and calls MCP tools through the host.
 
 ```bash
 npx wrangler login
-npx wrangler d1 create taskdag-db       # paste the id into wrangler.jsonc
+npx wrangler d1 create taskdag-db       # only for a new deployment; see below
 npm run migrate:remote                  # or: npm run migrate:local
 ```
 
-D1 is on the Workers Paid plan. Put the printed `database_id` into `wrangler.jsonc` where it says
-`REPLACE_WITH_YOUR_D1_DATABASE_ID`.
+D1 is on the Workers Paid plan. `wrangler.jsonc` already carries the `database_id` for this
+deployment's database — it is an identifier, not a credential, and it has to be committed because
+a Cloudflare Workers Build reads the binding straight out of the file. Deploying to a *different*
+account means creating your own database and replacing that id.
+
+The migration is **not** part of the deploy command, on purpose: a schema migration that runs on
+every push is a bad migration waiting to ship itself. Run `npm run migrate:remote` by hand after
+creating the database, and again whenever you add a migration. Until you do, the Worker deploys
+fine and every tool call fails with *no such table: graphs*.
 
 ### 3. Run it
 

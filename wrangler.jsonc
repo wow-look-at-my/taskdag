@@ -24,8 +24,7 @@
     {
       "binding": "DB",
       "database_name": "taskdag-db",
-      // Replace with the id `wrangler d1 create taskdag` prints.
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "926178ab-2566-4ec8-81a5-84da794ddca7",
       "migrations_dir": "migrations"
     }
   ]
