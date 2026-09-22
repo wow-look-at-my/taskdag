@@ -1,0 +1,30 @@
+{
+  "name": "reset",
+  "title": "Reset graph",
+  "description": "Empties a graph, which is also how one is deleted.",
+  "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
+  "inputSchema": {
+    "type": "object",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "required": [
+      "graph",
+      "confirm"
+    ],
+    "properties": {
+      "graph": {
+        "$ref": "common.json#/graph_id",
+        "description": "Which graph; required, this call has no default."
+      },
+      "confirm": {
+        "const": "RESET",
+        "description": "Must be the exact string \"RESET\"."
+      }
+    }
+  }
+}

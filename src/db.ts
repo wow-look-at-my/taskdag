@@ -24,7 +24,7 @@
  */
 
 import type { Edge, Task, TaskStatus } from './graph.ts';
-import { assignKeys, findCycle } from './graph.ts';
+import { findCycle, isPlaceholderKey, placeholderKeyMessage } from './graph.ts';
 import { ensureSchema } from './schema.ts';
 
 /** The whole working graph behind one handle, in key space. */
@@ -48,13 +48,35 @@ export interface GraphSummary extends GraphHandle {
   tasks: number;
 }
 
-/** One task as `plan` / `add_tasks` accept it. */
+/**
+ * How every list-valued field is written: ONE rule, two spellings.
+ *
+ * An array is the list, replacing whatever was there -- so `[]` clears it
+ * and a shorter list drops what it leaves out. `{ add, remove }` edits the
+ * list in place instead, which is what keeps "one more parent" from being a
+ * read-modify-write of two hundred keys. Absent means "leave it alone" in
+ * both spellings; there is no third verb, and no order dependence: within
+ * one edit `remove` is applied before `add`.
+ */
+export type ListEdit = string[] | { add?: string[]; remove?: string[] };
+
+/** Applies one {@link ListEdit} to the list a task currently carries. */
+export function applyListEdit(current: readonly string[], edit: ListEdit): string[] {
+  if (Array.isArray(edit)) return [...new Set(edit)];
+  const removed = new Set(edit.remove ?? []);
+  return [...new Set([...current.filter((value) => !removed.has(value)), ...(edit.add ?? [])])];
+}
+
+/** One task as `plan` accepts it. */
 export interface TaskInput {
-  key?: string;
-  title: string;
+  key: string;
+  /** Required when the key is new; omitted leaves an existing title alone. */
+  title?: string;
+  /** The keys this task waits for. See {@link ListEdit}. */
+  parents?: ListEdit;
   detail?: string;
   priority?: number;
-  tags?: string[];
+  tags?: ListEdit;
   status?: TaskStatus;
 }
 
@@ -214,18 +236,6 @@ export async function listGraphs(db: D1Database, owner: string): Promise<GraphSu
   return results.map((row) => ({ id: row.id, title: row.title, updated_at: row.updated_at, tasks: row.tasks ?? 0 }));
 }
 
-/**
- * Deletes a graph and everything under it. Cascades do the children.
- *
- * `resolveGraph` throws for a handle that is unknown or belongs to another
- * token, so reaching the DELETE at all means the handle is this owner's.
- */
-export async function deleteGraph(db: D1Database, owner: string, handle: string): Promise<boolean> {
-  const graph = await resolveGraph(db, owner, handle);
-  const result = await db.prepare('DELETE FROM graph_handles WHERE id = ? AND owner_id = ?').bind(graph!.id, owner).run();
-  return (result.meta.changes ?? 0) > 0;
-}
-
 /** Marks a graph as the owner's most recent, which is what `resolveGraph` picks by default. */
 function touchStatement(db: D1Database, graph: string, title?: string): D1PreparedStatement {
   const ts = now();
@@ -286,40 +296,46 @@ async function keyIndex(db: D1Database, graph: string): Promise<Map<string, stri
 export async function mergeGraph(
   db: D1Database,
   graph: string,
-  input: { title?: string; tasks?: TaskInput[]; edges?: Edge[] },
+  input: { title?: string; tasks?: TaskInput[] },
 ): Promise<MergeResult> {
   await ensureSchema(db);
   const incomingTasks = input.tasks ?? [];
-  const incomingEdges = input.edges ?? [];
 
-  for (const task of incomingTasks) {
-    if (!task.title || !task.title.trim()) throw new GraphError('Every task needs a non-empty title.');
-  }
-  for (const edge of incomingEdges) {
-    if (edge.from === edge.to) throw new GraphError(`Self-dependency on "${edge.from}" is not a dependency.`);
-  }
+  // A title is required to CREATE a task and optional to update one: the
+  // caller changing a status by key should not have to repeat the title it
+  // is not changing.
 
   const existing = await keyIndex(db, graph);
   const current = await loadGraph(db, graph);
 
-  // Keys first: an incoming task without one gets the next free T<n>, and
-  // edges may name those same new keys, so this has to settle before the
-  // edges are resolved.
-  const keys = assignKeys(
-    existing.keys(),
-    incomingTasks.map((t) => t.key),
-  );
+  // A key that names nothing is refused, but only when it would CREATE a
+  // task. Updating one that already carries such a key has to keep working:
+  // graphs written before this rule exist, and refusing to touch them would
+  // strand them.
+  for (const task of incomingTasks) {
+    const key = task.key.trim();
+    if (!key) throw new GraphError('Every task needs a key.');
+    if (!existing.has(key)) {
+      if (isPlaceholderKey(key)) throw new GraphError(placeholderKeyMessage(task.key));
+      if (!task.title?.trim()) throw new GraphError(`New task "${key}" needs a title.`);
+    }
+  }
+
+  const keys = incomingTasks.map((task) => task.key.trim());
 
   const created: string[] = [];
   const updated: string[] = [];
   const statements: D1PreparedStatement[] = [touchStatement(db, graph, input.title)];
   const ts = now();
   const idByKey = new Map(existing);
+  let linked = 0;
 
   incomingTasks.forEach((task, i) => {
     const key = keys[i];
     const id = idByKey.get(key);
-    const tags = task.tags ? JSON.stringify(task.tags) : null;
+    const tags = task.tags === undefined
+      ? null
+      : JSON.stringify(applyListEdit(current.tasks.find((t) => t.key === key)?.tags ?? [], task.tags));
     if (id === undefined) {
       const fresh = crypto.randomUUID();
       idByKey.set(key, fresh);
@@ -330,7 +346,7 @@ export async function mergeGraph(
             `INSERT INTO graph_tasks (id, graph_id, key, title, detail, status, priority, tags, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .bind(fresh, graph, key, task.title, task.detail ?? '', task.status ?? 'todo', task.priority ?? 0, tags ?? '[]', ts, ts),
+          .bind(fresh, graph, key, task.title!, task.detail ?? '', task.status ?? 'todo', task.priority ?? 0, tags ?? '[]', ts, ts),
       );
     } else {
       updated.push(key);
@@ -341,39 +357,54 @@ export async function mergeGraph(
         db
           .prepare(
             `UPDATE graph_tasks
-                SET title = ?, detail = COALESCE(?, detail), status = COALESCE(?, status),
+                SET title = COALESCE(?, title), detail = COALESCE(?, detail), status = COALESCE(?, status),
                     priority = COALESCE(?, priority), tags = COALESCE(?, tags), updated_at = ?
               WHERE graph_id = ? AND id = ?`,
           )
-          .bind(task.title, task.detail ?? null, task.status ?? null, task.priority ?? null, tags, ts, graph, id),
+          .bind(task.title ?? null, task.detail ?? null, task.status ?? null, task.priority ?? null, tags, ts, graph, id),
       );
     }
   });
 
-  // Edges resolve against tasks that exist after the merge, so an edge may
-  // name a key this same call is creating — but not one nobody ever sent.
-  const resolved: Edge[] = [];
-  for (const edge of incomingEdges) {
-    if (!idByKey.has(edge.from)) throw new GraphError(`Unknown task key "${edge.from}" in edges.`);
-    if (!idByKey.has(edge.to)) throw new GraphError(`Unknown task key "${edge.to}" in edges.`);
-    resolved.push(edge);
-  }
+  // Parents resolve against tasks that exist after the merge, so a task may
+  // name one this same call is creating — but not one nobody ever sent.
+  const declared = new Map<string, string[]>();
+  incomingTasks.forEach((task, i) => {
+    if (task.parents === undefined) return;
+    const key = keys[i];
+    const parents = applyListEdit(
+      current.edges.filter((edge) => edge.from === key).map((edge) => edge.to),
+      task.parents,
+    );
+    for (const parent of parents) {
+      if (parent === key) throw new GraphError(`Self-dependency on "${key}" is not a dependency.`);
+      if (!idByKey.has(parent)) throw new GraphError(`Unknown task key "${parent}" in parents of "${key}".`);
+    }
+    declared.set(key, parents);
+  });
 
-  const mergedEdges = dedupeEdges([...current.edges, ...resolved]);
+  // A declared list is the whole truth for that task: what it used to wait
+  // for and did not name again is gone.
+  const untouched = current.edges.filter((edge) => !declared.has(edge.from));
+  const redeclared: Edge[] = [...declared].flatMap(([key, parents]) => parents.map((parent) => ({ from: key, to: parent })));
+  const mergedEdges = dedupeEdges([...untouched, ...redeclared]);
+
   const cycle = findCycle(idByKey.keys(), mergedEdges);
   if (cycle) {
     throw new GraphError(`These edges would create a dependency cycle: ${cycle.join(' -> ')}. Nothing was changed.`);
   }
 
-  let linked = 0;
-  for (const edge of resolved) {
-    linked += 1;
+  for (const key of declared.keys()) {
+    statements.push(db.prepare('DELETE FROM graph_edges WHERE graph_id = ? AND from_id = ?').bind(graph, idByKey.get(key)!));
+  }
+  for (const edge of redeclared) {
     statements.push(
       db
         .prepare('INSERT INTO graph_edges (graph_id, from_id, to_id) VALUES (?, ?, ?) ON CONFLICT(from_id, to_id) DO NOTHING')
         .bind(graph, idByKey.get(edge.from)!, idByKey.get(edge.to)!),
     );
   }
+  linked = redeclared.length;
 
   await db.batch(statements);
   return { created_keys: created, updated_keys: updated, linked };
@@ -389,23 +420,6 @@ function dedupeEdges(edges: readonly Edge[]): Edge[] {
     out.push(edge);
   }
   return out;
-}
-
-/** Removes edges. Missing edges are not an error — unlink is idempotent. */
-export async function unlinkEdges(db: D1Database, graph: string, edges: readonly Edge[]): Promise<number> {
-  await ensureSchema(db);
-  const index = await keyIndex(db, graph);
-  const statements: D1PreparedStatement[] = [];
-  for (const edge of edges) {
-    const from = index.get(edge.from);
-    const to = index.get(edge.to);
-    if (!from || !to) throw new GraphError(`Unknown task key in unlink: ${!from ? edge.from : edge.to}`);
-    statements.push(db.prepare('DELETE FROM graph_edges WHERE graph_id = ? AND from_id = ? AND to_id = ?').bind(graph, from, to));
-  }
-  if (statements.length === 0) return 0;
-  statements.push(touchStatement(db, graph));
-  const results = await db.batch(statements);
-  return results.slice(0, -1).reduce((n, r) => n + (r.meta.changes ?? 0), 0);
 }
 
 /** Patches one task. Absent fields are left alone. */

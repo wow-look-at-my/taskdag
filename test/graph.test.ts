@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { assignKeys, blockedBy, findCycle, isAcyclic, nextAutoKey, readyKeys, selectSubgraph, toMermaid } from '../src/graph.ts';
+import { blockedBy, findCycle, isAcyclic, isPlaceholderKey, readyKeys, selectSubgraph, toMermaid } from '../src/graph.ts';
 import type { Edge, Task, TaskStatus } from '../src/graph.ts';
 import { isOwnerToken } from '../src/token.ts';
 
@@ -94,15 +94,18 @@ describe('readyKeys', () => {
 });
 
 describe('keys', () => {
-  it('takes the next free number rather than filling gaps', () => {
-    expect(nextAutoKey([])).toBe('T1');
-    expect(nextAutoKey(['T1', 'T2', 'T9'])).toBe('T10');
-    expect(nextAutoKey(['T1', 'T3'])).toBe('T4');
-    expect(nextAutoKey(['brand', 'cms'])).toBe('T1');
+  it('rejects the ones that name nothing', () => {
+    // `T3` is a slot number. A graph of them reads as T1 -> T2 -> T5 and
+    // tells a reader, or a model, nothing at all about the plan.
+    for (const key of ['T3', 't12', 'X1', '7', 'a', ' ', 'T0']) {
+      expect(isPlaceholderKey(key), key).toBe(true);
+    }
   });
 
-  it('assigns without colliding with each other or with existing keys', () => {
-    expect(assignKeys(['T1'], [undefined, 'brand', undefined])).toEqual(['T2', 'brand', 'T3']);
+  it('accepts anything that carries meaning', () => {
+    for (const key of ['brand', 'write-tests', 'cms_migration', 'step-1', 'PR-1423', 'v2-cutover']) {
+      expect(isPlaceholderKey(key), key).toBe(false);
+    }
   });
 });
 
