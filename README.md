@@ -217,16 +217,34 @@ ready queue **and** a diagram of what is blocking `staging`"* is one call:
 |---|---|
 | `summary` *(default)* | Handle, title, task and edge counts, status counts, and `selected` when narrowed |
 | `ready` *(default)* | The startable tasks, `limit` of them |
-| `tasks` | The selected tasks: key, title, status, priority, tags, and what blocks each |
+| `tasks` | The selected tasks: key, title, status, priority, tags, `parents`, and what blocks each |
 | `detail` | Full titles and `detail` text on those tasks, instead of shortened ones |
-| `edges` | The selected edges |
 | `mermaid` | A diagram of the selection, subject to the budget below |
 | `graphs` | Every non-empty graph on this connector |
 
-`write` is the same idea: one object, everything optional, composable. `tasks` upserts by key,
-`edges` adds dependencies, `unlink` removes them — and a single call can do all three, which an
-op-per-call shape could not. Only `key` is required on a task, so changing a status is
-`{"tasks":[{"key":"staging","status":"done"}]}`; a title is required only when the key is new.
+`write` takes **the same `graph` object `read` gives back** — a `title` and its `tasks` — so
+anything read can be sent straight back without being reshaped. `tasks` upserts by key. There is no
+separate edge list: a task names its own `parents`, which is what it waits for, so adding and
+removing a dependency are the same field and one call does both. Only `key` is required on a task,
+so changing a status is `{"tasks":[{"key":"staging","status":"done"}]}`; a title is required only
+when the key is new.
+
+**Every list-valued field — `parents`, `tags` — is written one of two ways, and there is no third
+verb:**
+
+| Sent | Means |
+|---|---|
+| *absent* | Leave the list alone |
+| `["a","b"]` | **Replace**: the list is now exactly this, so `[]` clears it and a shorter list drops what it leaves out |
+| `{"add":["c"],"remove":["a"]}` | **Edit in place**: `remove` first, then `add`, leaving everything unnamed where it was |
+
+Replace is the honest default — it is how a plan gets restated — but it makes "one more parent" a
+read-modify-write of every key that was already there, which is why the object spelling exists.
+Both are idempotent: removing what is not there, or adding what is, changes nothing.
+
+```json
+{"tasks":[{"key":"staging","parents":{"add":["brand"],"remove":["cms"]}}]}
+```
 
 `reset` stays its own tool: hosts grant permission per tool *name* and `destructiveHint` is per
 tool, so folding it in would make "you may tick tasks off" and "you may wipe the graph" one grant.

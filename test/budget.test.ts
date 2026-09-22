@@ -28,8 +28,8 @@ const BIG = {
     key: `step-${i + 1}`,
     title: `Task number ${i + 1} with a realistic title`,
     tags: ['area:backend'],
+    ...(i > 0 ? { parents: [`step-${i}`] } : {}),
   })),
-  edges: Array.from({ length: 39 }, (_, i) => ({ from: `step-${i + 2}`, to: `step-${i + 1}` })),
 };
 
 describe('context budget', () => {
@@ -71,7 +71,7 @@ describe('context budget', () => {
     };
     walk([READ_SCHEMA, WRITE_SCHEMA, RESET_SCHEMA]);
 
-    expect(descriptions.length).toBeGreaterThan(15);
+    expect(descriptions.length).toBeGreaterThanOrEqual(15);
     for (const description of descriptions) {
       expect(description, description).not.toMatch(/[.!?]\s+[A-Z]/);
       expect(description.length, description).toBeLessThanOrEqual(90);
@@ -106,7 +106,7 @@ describe('context budget', () => {
     for (const [name, args] of [
       ['read', {}],
       ['read', { limit: 50 }],
-      ['write', { edges: [{ from: 'step-1', to: 'step-40' }] }],
+      ['write', { tasks: [{ key: 'step-1', parents: { add: ['step-40'] } }] }],
       ['write', { tasks: [{ key: 'step-1', status: 'done' }] }],
     ] as const) {
       const text = textOf(await mcp.tool(name, { graph: planned.graph, ...args }));

@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from './fake-d1.ts';
-import { GraphError, createGraph, getTask, loadGraph, mergeGraph, patchTask, resetGraph, unlinkEdges } from '../src/db.ts';
+import { GraphError, createGraph, getTask, loadGraph, mergeGraph, patchTask, resetGraph } from '../src/db.ts';
 import { readyKeys } from '../src/graph.ts';
 
 const TOKEN = 'kJ3nQ7vB9xZp2LmR8tW4yU6iO1aS5dF0gH-_cVbNxQe';
@@ -37,16 +37,10 @@ const SITE = {
   title: 'Site relaunch',
   tasks: [
     { key: 'brand', title: 'Brand refresh' },
-    { key: 'homepage', title: 'Homepage build' },
+    { key: 'homepage', title: 'Homepage build', parents: ['brand'] },
     { key: 'cms', title: 'CMS migration' },
-    { key: 'staging', title: 'Staging deploy' },
-    { key: 'prod', title: 'Production cutover' },
-  ],
-  edges: [
-    { from: 'homepage', to: 'brand' },
-    { from: 'staging', to: 'homepage' },
-    { from: 'staging', to: 'cms' },
-    { from: 'prod', to: 'staging' },
+    { key: 'staging', title: 'Staging deploy', parents: ['homepage', 'cms'] },
+    { key: 'prod', title: 'Production cutover', parents: ['staging'] },
   ],
 };
 
@@ -63,9 +57,12 @@ describe('mergeGraph', () => {
   });
 
   it('builds a 12-node graph in one call', async () => {
-    const tasks = Array.from({ length: 12 }, (_, i) => ({ key: `step-${i + 1}`, title: `Task ${i + 1}` }));
-    const edges = tasks.slice(1).map((t, i) => ({ from: t.key, to: `step-${i + 1}` }));
-    await mergeGraph(db, OWNER, { tasks, edges });
+    const tasks = Array.from({ length: 12 }, (_, i) => ({
+      key: `step-${i + 1}`,
+      title: `Task ${i + 1}`,
+      ...(i > 0 ? { parents: [`step-${i}`] } : {}),
+    }));
+    await mergeGraph(db, OWNER, { tasks });
 
     const state = await loadGraph(db, OWNER);
     expect(state.tasks).toHaveLength(12);
@@ -77,9 +74,8 @@ describe('mergeGraph', () => {
     const second = await mergeGraph(db, OWNER, {
       tasks: [
         { key: 'homepage', title: 'Homepage build (v2)' },
-        { key: 'analytics', title: 'Analytics' },
+        { key: 'analytics', title: 'Analytics', parents: ['prod'] },
       ],
-      edges: [{ from: 'analytics', to: 'prod' }],
     });
 
     expect(second.updated_keys).toEqual(['homepage']);
@@ -103,15 +99,15 @@ describe('mergeGraph', () => {
     expect((await getTask(db, OWNER, 'brand'))?.status).toBe('todo');
   });
 
-  it('is idempotent for duplicate edges', async () => {
+  it('is idempotent: re-declaring the same parents changes nothing', async () => {
     await mergeGraph(db, OWNER, SITE);
-    await mergeGraph(db, OWNER, { edges: SITE.edges });
+    await mergeGraph(db, OWNER, SITE);
     expect((await loadGraph(db, OWNER)).edges).toHaveLength(4);
   });
 
   it('rejects a cycle and changes nothing', async () => {
     await mergeGraph(db, OWNER, SITE);
-    await expect(mergeGraph(db, OWNER, { edges: [{ from: 'brand', to: 'prod' }] })).rejects.toBeInstanceOf(GraphError);
+    await expect(mergeGraph(db, OWNER, { tasks: [{ key: 'brand', parents: ['prod'] }] })).rejects.toBeInstanceOf(GraphError);
 
     const state = await loadGraph(db, OWNER);
     expect(state.edges).toHaveLength(4);
@@ -121,21 +117,20 @@ describe('mergeGraph', () => {
   it('rejects a cycle formed inside a single call, writing no tasks', async () => {
     await expect(
       mergeGraph(db, OWNER, {
-        tasks: [{ key: 'a', title: 'A' }, { key: 'b', title: 'B' }],
-        edges: [
-          { from: 'a', to: 'b' },
-          { from: 'b', to: 'a' },
+        tasks: [
+          { key: 'a', title: 'A', parents: ['b'] },
+          { key: 'b', title: 'B', parents: ['a'] },
         ],
       }),
     ).rejects.toBeInstanceOf(GraphError);
     expect((await loadGraph(db, OWNER)).tasks).toHaveLength(0);
   });
 
-  it('rejects self-edges and unknown keys', async () => {
-    await expect(mergeGraph(db, OWNER, { tasks: [{ key: 'a', title: 'A' }], edges: [{ from: 'a', to: 'a' }] })).rejects.toBeInstanceOf(
-      GraphError,
-    );
-    await expect(mergeGraph(db, OWNER, { edges: [{ from: 'ghost', to: 'phantom' }] })).rejects.toBeInstanceOf(GraphError);
+  it('rejects a self-parent and an unknown parent', async () => {
+    await expect(mergeGraph(db, OWNER, { tasks: [{ key: 'a', title: 'A', parents: ['a'] }] })).rejects.toBeInstanceOf(GraphError);
+    await expect(
+      mergeGraph(db, OWNER, { tasks: [{ key: 'ghost', title: 'Ghost', parents: ['phantom'] }] }),
+    ).rejects.toBeInstanceOf(GraphError);
   });
 
   it('keeps two tokens apart', async () => {
@@ -173,21 +168,55 @@ describe('patchTask', () => {
   });
 });
 
-describe('unlinkEdges', () => {
-  it('removes edges and keeps the tasks', async () => {
+/**
+ * The one rule for every list-valued field: an array IS the list, and
+ * `{ add, remove }` edits the one that is there. There is no third verb,
+ * and "unlink" is just a shorter list.
+ */
+describe('parents, as a list', () => {
+  it('replaces the list, which is how an edge is removed', async () => {
     await mergeGraph(db, OWNER, SITE);
-    const removed = await unlinkEdges(db, OWNER, [{ from: 'staging', to: 'cms' }]);
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'staging', parents: ['homepage'] }] });
 
-    expect(removed).toBe(1);
     const state = await loadGraph(db, OWNER);
     expect(state.edges).toHaveLength(3);
-    expect(state.tasks).toHaveLength(5);
+    expect(state.tasks).toHaveLength(5); // the task it pointed at is untouched
   });
 
-  it('is idempotent', async () => {
+  it('clears the list with []', async () => {
     await mergeGraph(db, OWNER, SITE);
-    await unlinkEdges(db, OWNER, [{ from: 'staging', to: 'cms' }]);
-    expect(await unlinkEdges(db, OWNER, [{ from: 'staging', to: 'cms' }])).toBe(0);
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'staging', parents: [] }] });
+    expect((await loadGraph(db, OWNER)).edges.filter((e) => e.from === 'staging')).toEqual([]);
+  });
+
+  it('leaves the list alone when the key does not mention it', async () => {
+    await mergeGraph(db, OWNER, SITE);
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'staging', status: 'in_progress' }] });
+    expect((await loadGraph(db, OWNER)).edges).toHaveLength(4);
+  });
+
+  it('adds and removes without restating the rest', async () => {
+    await mergeGraph(db, OWNER, SITE);
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'staging', parents: { add: ['brand'], remove: ['cms'] } }] });
+
+    const parents = (await loadGraph(db, OWNER)).edges.filter((e) => e.from === 'staging').map((e) => e.to);
+    expect(parents.sort()).toEqual(['brand', 'homepage']);
+  });
+
+  it('applies the same two spellings to tags', async () => {
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'brand', title: 'Brand refresh', tags: ['design', 'q3'] }] });
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'brand', tags: { add: ['urgent'], remove: ['q3'] } }] });
+    expect((await getTask(db, OWNER, 'brand'))?.tags).toEqual(['design', 'urgent']);
+
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'brand', tags: [] }] });
+    expect((await getTask(db, OWNER, 'brand'))?.tags).toEqual([]);
+  });
+
+  it('is idempotent: removing what is not there is not an error', async () => {
+    await mergeGraph(db, OWNER, SITE);
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'staging', parents: { remove: ['cms'] } }] });
+    await mergeGraph(db, OWNER, { tasks: [{ key: 'staging', parents: { remove: ['cms'] } }] });
+    expect((await loadGraph(db, OWNER)).edges).toHaveLength(3);
   });
 });
 

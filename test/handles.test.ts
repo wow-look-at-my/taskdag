@@ -30,13 +30,8 @@ const SITE = {
   tasks: [
     { key: 'brand', title: 'Brand refresh' },
     { key: 'cms', title: 'CMS migration' },
-    { key: 'homepage', title: 'Homepage build' },
-    { key: 'staging', title: 'Staging deploy' },
-  ],
-  edges: [
-    { from: 'homepage', to: 'brand' },
-    { from: 'staging', to: 'homepage' },
-    { from: 'staging', to: 'cms' },
+    { key: 'homepage', title: 'Homepage build', parents: ['brand'] },
+    { key: 'staging', title: 'Staging deploy', parents: ['homepage', 'cms'] },
   ],
 };
 

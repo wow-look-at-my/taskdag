@@ -21,39 +21,45 @@
     ]
   },
   "tags": {
-    "type": "array",
-    "items": {
-      "type": "string",
-      "maxLength": 40
-    },
-    "maxItems": 20
+    "description": "Labels; an array replaces them, {add,remove} edits them.",
+    "oneOf": [
+      {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "string",
+          "maxLength": 40
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "description": "Edits the list in place instead of replacing it.",
+        "properties": {
+          "add": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            }
+          },
+          "remove": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            }
+          }
+        }
+      }
+    ]
   },
   "priority": {
     "type": "integer",
     "description": "Higher sorts first in the ready queue."
-  },
-  "edges": {
-    "type": "array",
-    "maxItems": 400,
-    "description": "{ from, to } means \"from depends on to\"; cycles and self-edges are refused.",
-    "items": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "from",
-        "to"
-      ],
-      "properties": {
-        "from": {
-          "type": "string",
-          "description": "The dependent key."
-        },
-        "to": {
-          "type": "string",
-          "description": "The prerequisite key."
-        }
-      }
-    }
   },
   "detail": {
     "type": "string",
@@ -75,6 +81,40 @@
         "minLength": 1,
         "description": "Short imperative title."
       },
+      "parents": {
+        "description": "Keys this task waits for; an array replaces them, {add,remove} edits them.",
+        "oneOf": [
+          {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "description": "Edits the list in place instead of replacing it.",
+            "properties": {
+              "add": {
+                "type": "array",
+                "maxItems": 200,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove": {
+                "type": "array",
+                "maxItems": 200,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
       "detail": {
         "$ref": "common.json#/detail"
       },
@@ -86,6 +126,25 @@
       },
       "tags": {
         "$ref": "common.json#/tags"
+      }
+    }
+  },
+  "graph": {
+    "type": "object",
+    "additionalProperties": false,
+    "description": "A graph: a title and its tasks, each naming what it waits for.",
+    "properties": {
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Names the graph."
+      },
+      "tasks": {
+        "type": "array",
+        "maxItems": 200,
+        "items": {
+          "$ref": "common.json#/task"
+        }
       }
     }
   }

@@ -43,7 +43,6 @@ import {
   recordOverflow,
   resetGraph,
   resolveGraph,
-  unlinkEdges,
 } from './db.ts';
 import type { GraphHandle, GraphState, TaskInput } from './db.ts';
 import { tokenTail } from './token.ts';
@@ -206,8 +205,13 @@ function inlineRefs(node: unknown): unknown {
   const ref = entries.find(([key]) => key === '$ref')?.[1];
   const resolved: Record<string, unknown> = {};
   if (typeof ref === 'string') {
-    const name = ref.replace('common.json#/', '');
-    const definition = (COMMON_SCHEMA as Record<string, unknown>)[name];
+    // A pointer, so one call site can borrow a single property of a shared
+    // definition: `common.json#/graph/properties/tasks`.
+    const path = ref.replace('common.json#/', '').split('/');
+    const definition = path.reduce<unknown>(
+      (node, step) => (node === undefined ? undefined : (node as Record<string, unknown>)[step]),
+      COMMON_SCHEMA as unknown,
+    );
     if (definition === undefined) throw new Error(`No common definition for "${ref}"`);
     // Recurse: a shared definition may itself be built from shared pieces,
     // and copying it wholesale would ship those inner `$ref`s to a client
@@ -237,7 +241,7 @@ interface ReadArgs {
   depth?: number;
   direction?: 'up' | 'down' | 'both';
   status?: TaskStatus[];
-  include?: ('summary' | 'ready' | 'tasks' | 'edges' | 'detail' | 'mermaid' | 'graphs')[];
+  include?: ('summary' | 'ready' | 'tasks' | 'detail' | 'mermaid' | 'graphs')[];
   limit?: number;
   max_chars?: number;
   override_token?: string;
@@ -248,8 +252,6 @@ interface WriteArgs {
   new_graph?: boolean;
   title?: string;
   tasks?: TaskInput[];
-  edges?: Edge[];
-  unlink?: Edge[];
 }
 
 // -- Registration ---------------------------------------------------------------------
@@ -331,10 +333,10 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
       annotations: writeTool.annotations,
       _meta: { ui: { resourceUri: BOARD_URI, prefersBorder: true, visibility: ['model', 'app'] } },
     },
-    async ({ graph, new_graph, title, tasks, edges, unlink }) =>
+    async ({ graph, new_graph, title, tasks }) =>
       guard(async () => {
-        if (!tasks?.length && !edges?.length && !unlink?.length && title === undefined) {
-          return fail('Nothing to write: send `tasks`, `edges`, `unlink` or `title`.');
+        if (!tasks?.length && title === undefined) {
+          return fail('Nothing to write: send `tasks` or `title`.');
         }
 
         const target =
@@ -342,18 +344,15 @@ export function registerTaskDag(server: McpServer, ctx: ToolContext): void {
             ? await createGraph(ctx.db, ctx.owner, title)
             : (await resolveGraph(ctx.db, ctx.owner, graph, { create: true, title }))!;
 
-        // One call can add and remove in the same breath, which the old
-        // op-per-call shape could not: "these three now depend on that, and
-        // that one no longer does" was two round trips and two receipts.
-        const merged = tasks?.length || edges?.length || title !== undefined
-          ? await mergeGraph(ctx.db, target.id, { title, tasks, edges })
-          : undefined;
-        const unlinked = unlink?.length ? await unlinkEdges(ctx.db, target.id, unlink) : undefined;
+        // One call adds and removes in the same breath: a task's `parents`
+        // says what it waits for now, so "these three depend on that, and
+        // that one no longer does" is one write and one receipt.
+        const merged = await mergeGraph(ctx.db, target.id, { title, tasks });
 
         return receipt(await loadGraph(ctx.db, target.id), {
-          ...(merged ? { created: merged.created_keys, updated: merged.updated_keys } : {}),
-          ...(merged?.linked ? { linked: merged.linked } : {}),
-          ...(unlinked !== undefined ? { unlinked } : {}),
+          created: merged.created_keys,
+          updated: merged.updated_keys,
+          ...(merged.linked ? { linked: merged.linked } : {}),
         });
       }),
   );
@@ -425,18 +424,20 @@ async function readGraph(ctx: ToolContext, args: ReadArgs) {
   if (include.has('tasks')) {
     const wanted = include.has('detail');
     const blocked = new Map(selected.tasks.map((task) => [task.key, blockedBy(task.key, state.tasks, state.edges)]));
+    // `parents` is the same field `write` takes, so a task read back can be
+    // sent straight through the other tool without being reshaped.
+    const parents = new Map(selected.tasks.map((task) => [task.key, state.edges.filter((edge) => edge.from === task.key).map((edge) => edge.to)]));
     body.task_list = selected.tasks.map((task) => ({
       key: task.key,
       title: wanted ? task.title : shorten(task.title),
       status: task.status,
+      ...(parents.get(task.key)?.length ? { parents: parents.get(task.key) } : {}),
       ...(task.priority !== 0 ? { priority: task.priority } : {}),
       ...(task.tags.length > 0 ? { tags: task.tags } : {}),
       ...(wanted && task.detail ? { detail: task.detail } : {}),
       ...(blocked.get(task.key)?.length ? { blocked_by: blocked.get(task.key) } : {}),
     }));
   }
-
-  if (include.has('edges')) body.edge_list = selected.edges;
 
   if (include.has('graphs')) body.graphs = await listGraphs(ctx.db, ctx.owner);
 

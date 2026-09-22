@@ -27,8 +27,11 @@ interface Drawn {
 function chain(n: number) {
   return {
     title: 'Big plan',
-    tasks: Array.from({ length: n }, (_, i) => ({ key: `step-${i + 1}`, title: `Task number ${i + 1}, with a title of a realistic length` })),
-    edges: Array.from({ length: n - 1 }, (_, i) => ({ from: `step-${i + 2}`, to: `step-${i + 1}` })),
+    tasks: Array.from({ length: n }, (_, i) => ({
+      key: `step-${i + 1}`,
+      title: `Task number ${i + 1}, with a title of a realistic length`,
+      ...(i > 0 ? { parents: [`step-${i}`] } : {}),
+    })),
   };
 }
 

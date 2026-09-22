@@ -221,7 +221,7 @@ describe('the URL is the identity', () => {
 
     await call(e, 'tools/call', {
       name: 'write',
-      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
+      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }] },
     });
 
     // Nothing links these two requests: no session, no cookie, no stream.
@@ -234,7 +234,7 @@ describe('the URL is the identity', () => {
 
     await call(e, 'tools/call', {
       name: 'write',
-      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }], edges: [] },
+      arguments: { title: 'Site relaunch', tasks: [{ key: 'brand', title: 'Brand refresh' }] },
     });
 
     expect(await graphKeys(e, OTHER_TOKEN)).toEqual([]);
