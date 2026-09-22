@@ -78,25 +78,28 @@ const HOST_PAGE = `<!doctype html>
   window.__reads = [];
   window.__displayModes = [];
 
+  const CTX = {
+    ...(THEME ? { theme: THEME } : {}),
+    displayMode: 'inline',
+    availableDisplayModes: ['inline', 'fullscreen'],
+    containerDimensions: { width: 680, maxHeight: 520 },
+  };
+
   const send = (msg) => frame.contentWindow.postMessage(msg, '*');
   const result = (id, value) => send({ jsonrpc: '2.0', id, result: value });
+  // The host changing its own mind, which is what claude.ai's X in the
+  // corner of an expanded panel does.
+  window.__setDisplayMode = (mode) => {
+    CTX.displayMode = mode;
+    send({ jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: CTX });
+  };
 
   window.addEventListener('message', (event) => {
     const msg = event.data;
     if (!msg || msg.jsonrpc !== '2.0') return;
 
     if (msg.method === 'ui/initialize') {
-      result(msg.id, {
-        protocolVersion: msg.params.protocolVersion,
-        hostInfo: { name: 'check-board', version: '0.1.0' },
-        hostCapabilities: {},
-        hostContext: {
-          ...(THEME ? { theme: THEME } : {}),
-          displayMode: 'inline',
-          availableDisplayModes: ['inline', 'fullscreen'],
-          containerDimensions: { width: 680, maxHeight: 520 },
-        },
-      });
+      result(msg.id, { protocolVersion: msg.params.protocolVersion, hostInfo: { name: 'check-board', version: '0.1.0' }, hostCapabilities: {}, hostContext: CTX });
       return;
     }
     if (msg.method === 'ui/notifications/initialized') {
@@ -109,6 +112,9 @@ const HOST_PAGE = `<!doctype html>
     if (msg.method === 'ui/request-display-mode') {
       window.__displayModes.push(msg.params.mode);
       result(msg.id, { mode: msg.params.mode });
+      // A real host tells the app what it decided, rather than leaving the
+      // app to assume its own request took effect.
+      window.__setDisplayMode(msg.params.mode);
       return;
     }
     if (msg.method === 'resources/read') {
@@ -281,16 +287,35 @@ await view.locator('#status').filter({ hasText: 'Copied JSON' }).waitFor({ timeo
 const json = JSON.parse(await view.locator('body').evaluate(() => navigator.clipboard.readText()));
 check('JSON copy is the raw graph', json.nodes.length === 5 && json.edges.length === 4, JSON.stringify(json).slice(0, 80));
 
-// 5. Expanding: the element fills the iframe, and the host is asked to make
-// the iframe worth filling.
-await view.locator('#graph').evaluate((el) => el.shadowRoot.querySelector('.fs-btn').click());
-check('the element went fullscreen', await view.locator('#graph').evaluate((el) => el.hasAttribute('fullscreen')));
-await page.waitForFunction(() => window.__displayModes.includes('fullscreen'), null, { timeout: 5000 });
-check('the host was asked for a fullscreen card', true);
+// 5. Expanding. The element's OWN fullscreen mode is `position: fixed;
+// inset: 0`, which lifts the canvas out of flow -- so it stays suppressed,
+// and expanding is a height plus a request to the host.
+check(
+  "the element's own fullscreen button stays suppressed",
+  await view.locator('#graph').evaluate((el) => el.shadowRoot.querySelector('.fs-btn').hidden),
+);
 
-await view.locator('#graph').evaluate((el) => el.shadowRoot.querySelector('.fs-btn').click());
-await page.waitForFunction(() => window.__displayModes.includes('inline'), null, { timeout: 5000 });
-check('leaving fullscreen asks for the card back', await view.locator('#graph').evaluate((el) => !el.hasAttribute('fullscreen')));
+const graphBox = () => view.locator('#graph').evaluate((el) => el.getBoundingClientRect().height);
+const inlineHeight = await graphBox();
+
+await view.locator('#expand').click();
+await page.waitForFunction(() => window.__displayModes.includes('fullscreen'), null, { timeout: 5000 });
+check('Expand asks the host for a fullscreen card', true);
+check('the graph grew', (await graphBox()) > inlineHeight);
+check('the card chrome is still there while expanded', await view.locator('#title').isVisible());
+check(
+  'the canvas never leaves the flow',
+  await view.locator('#graph').evaluate((el) => getComputedStyle(el).position !== 'fixed' && !el.hasAttribute('fullscreen')),
+);
+
+// THE REGRESSION. Leaving fullscreen by the HOST's control rather than the
+// card's own: the card must follow the host back down, not stay sized for a
+// panel it no longer has. Getting this wrong collapsed the card to a sliver.
+await page.evaluate(() => window.__setDisplayMode('inline'));
+await view.locator('#expand').filter({ hasText: 'Expand' }).waitFor({ timeout: 5000 });
+check('the host leaving fullscreen puts the card back', Math.abs((await graphBox()) - inlineHeight) < 2, `${await graphBox()} vs ${inlineHeight}`);
+check('the card did not collapse', (await graphBox()) > 100);
+check('the chrome survived the round trip', (await view.locator('#title').isVisible()) && (await view.locator('#copy').isVisible()));
 
 check('no page errors', errors.length === 0, errors.join(' | '));
 

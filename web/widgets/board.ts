@@ -146,6 +146,7 @@ let busy = false;
 const app = new App({ name: 'taskdag-board', version: '0.1.0' });
 
 const copyBtn = document.getElementById('copy') as HTMLButtonElement;
+const expandBtn = document.getElementById('expand') as HTMLButtonElement;
 const copyMenu = document.getElementById('copymenu') as HTMLDivElement;
 
 /** The graph the receipt pointed at, kept for the copy formats. */
@@ -452,20 +453,61 @@ document.addEventListener('keydown', (event) => {
 // -- Expanding ----------------------------------------------------------------------------
 
 /**
- * `<dag-view>`'s own fullscreen button fills the iframe, which is only as
- * big as the host made the card. So when it toggles, ask the host for the
- * matching display mode: the element handles the canvas, the host handles
- * the frame around it. A host that offers no fullscreen mode still gets the
- * in-iframe fill, which is why this never blocks the toggle.
+ * Expanding, without leaving the document.
+ *
+ * `<dag-view>` ships a fullscreen button, and it is deliberately suppressed
+ * (`no-fullscreen-button`): its mode is `position: fixed; inset: 0`, which
+ * fills the iframe viewport and lifts the canvas out of flow. In a page
+ * that is fine. In an inline chat card it is not — the title, the buttons
+ * and the status line end up behind a full-bleed canvas, and a host that
+ * sizes the frame to its content sees the body collapse to nothing.
+ *
+ * So expanding is a height on the graph and a request to the host for a
+ * bigger card. Everything stays in flow, the chrome stays visible, and a
+ * host that declines the display mode still gets a taller graph inside the
+ * card it already had.
  */
-graphEl.addEventListener('fullscreenchange', (event) => {
-  const wants = (event as CustomEvent<{ fullscreen: boolean }>).detail?.fullscreen === true;
-  const mode = wants ? 'fullscreen' : 'inline';
+function setExpanded(on: boolean): void {
+  if (on) document.documentElement.setAttribute('data-expanded', '');
+  else document.documentElement.removeAttribute('data-expanded');
+  expandBtn.textContent = on ? 'Collapse' : 'Expand';
+  expandBtn.setAttribute('aria-pressed', String(on));
+  // No resize call: the element keeps a ResizeObserver on itself, so
+  // changing its height is enough to make the canvas repaint at the new
+  // size.
+}
+
+/**
+ * THE HOST OWNS THE DISPLAY MODE, AND THIS FOLLOWS IT.
+ *
+ * A host can leave fullscreen without telling this card first — claude.ai
+ * puts an X in the corner of the expanded panel, and clicking it returns
+ * the frame to inline. Anything the card latched on the way in has to come
+ * back off on the way out, or it is left sized for a window it no longer
+ * has. That is what made the card collapse to a sliver: the old code put
+ * the canvas into the element's own `position: fixed` fullscreen, the host
+ * shrank the frame behind it, and the canvas stayed pinned over a body
+ * that now had no height at all.
+ *
+ * So `data-display` is a mirror of the host's mode, never a wish, and the
+ * expanded height is defined in terms of it.
+ */
+function applyDisplayMode(context: McpUiHostContext | undefined): void {
+  const mode = context?.displayMode ?? 'inline';
+  document.documentElement.setAttribute('data-display', mode);
+  if (mode !== 'fullscreen' && expandBtn.getAttribute('aria-pressed') === 'true') setExpanded(false);
+}
+
+expandBtn.addEventListener('click', () => {
+  const next = expandBtn.getAttribute('aria-pressed') !== 'true';
+  setExpanded(next);
+
+  const mode = next ? 'fullscreen' : 'inline';
   const available = app.getHostContext()?.availableDisplayModes;
   if (available !== undefined && !available.includes(mode)) return;
   void app.requestDisplayMode({ mode }).catch(() => {
-    // The host declined. The canvas is already filling the iframe, so there
-    // is nothing to undo and nothing worth interrupting the user over.
+    // The host kept the card its current size. The taller graph inside it
+    // is still the useful half of what was asked for.
   });
 });
 
@@ -530,11 +572,15 @@ app.addEventListener('toolresult', (params) => {
   });
 });
 
-app.addEventListener('hostcontextchanged', (context) => applyTheme(context));
+app.addEventListener('hostcontextchanged', (context) => {
+  applyTheme(context);
+  applyDisplayMode(context);
+});
 
 void (async () => {
   await app.connect();
   applyTheme(app.getHostContext());
+  applyDisplayMode(app.getHostContext());
   // A board mounted without a result to draw (a re-opened conversation, a
   // host that does not replay) asks for one rather than sitting empty.
   if (!board.graph?.nodes.length) await refresh();
