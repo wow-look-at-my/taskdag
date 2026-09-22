@@ -48,8 +48,8 @@ The graph element (`<dag-view>`) is vendored as a pinned submodule from the **pr
 machine needs GitHub access to that repo; Cloudflare does not.
 
 ```bash
-git clone --recurse-submodules https://github.com/wow-look-at-my/dag-mcp.git
-cd dag-mcp
+git clone --recurse-submodules https://github.com/wow-look-at-my/taskdag.git
+cd taskdag
 # or, in an existing clone:
 git submodule update --init
 npm install
