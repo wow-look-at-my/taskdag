@@ -53,9 +53,10 @@ and the Statelessness chapter closes the workarounds: a server **MUST NOT** rely
 over the same connection to establish context *including client identity*, an open connection
 *"is not a conversation or session"*, and state spanning requests **MUST** be referenced by an
 explicit identifier the client passes every time. There is no conversation or thread id anywhere in
-`_meta` either — the reserved set is `protocolVersion`, `clientInfo`, `clientCapabilities`,
-`logLevel`, `subscriptionId` and `serverInfo`, and `clientInfo` is `{name, version}` (`"ClaudeAI"`),
-which is a product, not a person.
+`_meta` either — the reserved `io.modelcontextprotocol/*` keys are the protocol version, the
+client's info and capabilities, a log level, a subscription id, the server's info, and task/skill
+plumbing. The closest thing to a name in any of them is `clientInfo`, which is the product
+(`"ClaudeAI"` from claude.ai, `"claude-code"` from the CLI) and its version — not a person.
 
 So the two sanctioned answers are OAuth for *who* and a server-minted handle passed on every call
 for *which working set*. The token in the path is TaskDAG's handle: minted in your browser instead
