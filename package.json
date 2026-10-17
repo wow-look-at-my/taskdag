@@ -28,7 +28,7 @@
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "agents": "^0.24.0",
+    "agents": "^0.28.1",
     "zod": "^4.6.5"
   }
 }
